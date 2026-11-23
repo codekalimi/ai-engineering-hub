@@ -50,6 +50,10 @@
             ["#your-edge", "Your backend edge"], ["#roadmap", "90-day plan"],
           ],
         },
+        { id: "career/ai-engineer-interview", title: "AI Engineer questions", href: "career/ai-engineer-interview.html" },
+        { id: "career/fde-interview", title: "Forward Deployed questions", href: "career/fde-interview.html" },
+        { id: "career/ai-infra-interview", title: "AI Infra questions", href: "career/ai-infra-interview.html" },
+        { id: "career/ai-architect-interview", title: "AI Architect questions", href: "career/ai-architect-interview.html" },
       ],
     },
   ];
@@ -75,14 +79,16 @@
       <div class="group-body" id="${gid}">`;
     g.pages.forEach((p, pi) => {
       const isCur = p.id === current, sid = `subs-${gi}-${pi}`;
+      // Pages may list sections here, or (when current) provide them via window.PAGE_SUBS
+      const subs = p.subs || (isCur && window.PAGE_SUBS) || [];
       html += `<div class="nav-page${isCur ? " current" : ""}">
         <div class="row">
           <a href="${root}${p.href}"${isCur ? ' aria-current="page"' : ""}>${esc(p.title)}</a>
-          <button class="chev" type="button" aria-expanded="${isCur}" aria-controls="${sid}" aria-label="Show sections of ${esc(p.title)}">${caret}</button>
+          ${subs.length ? `<button class="chev" type="button" aria-expanded="${isCur}" aria-controls="${sid}" aria-label="Show sections of ${esc(p.title)}">${caret}</button>` : ""}
         </div>
-        <ul class="subs" id="${sid}"${isCur ? "" : " hidden"}>
-          ${p.subs.map(([h, t]) => `<li><a href="${isCur ? h : root + p.href + h}" data-hash="${isCur ? h : ""}">${esc(t)}</a></li>`).join("")}
-        </ul>
+        ${subs.length ? `<ul class="subs" id="${sid}"${isCur ? "" : " hidden"}>
+          ${subs.map(([h, t]) => `<li><a href="${isCur ? h : root + p.href + h}" data-hash="${isCur ? h : ""}">${esc(t)}</a></li>`).join("")}
+        </ul>` : ""}
       </div>`;
     });
     html += `</div></div>`;

@@ -11,11 +11,35 @@ ai-engineering-notes/
 │   ├── site.css                Shared styles (colors, layout, sidebar, components)
 │   ├── site.js                 Builds the left index — the NAV list lives here
 │   └── flow-player.js          Step-through diagram engine
-└── langchain/
-    ├── under-the-hood.html     Interactive flows page
-    ├── flows-data.js           The flow diagrams + steps (edit content here)
-    └── templates.html          Mental templates page
+├── langchain/
+│   ├── under-the-hood.html     Interactive flows page
+│   ├── flows-data.js           The flow diagrams + steps (edit content here)
+│   ├── templates.html          Mental templates page
+│   ├── components.html         Component reference (data: components-data.js)
+│   └── interview.html          Class/method interview prep (data: interview-data.js)
+└── career/
+    ├── ai-roles.html           Roles, skills, levels, 90-day plan
+    ├── *-interview.html        One question bank per role (all share assets/qbank.js)
+    └── data/                   Questions per role: ai-engineer.js, fde.js, ai-infra.js, ai-architect.js
 ```
+
+## Add an interview question
+
+Open the role's file in `career/data/` and add a line to `questions`:
+
+```js
+Q("t-rag", M, "Your question?", "What they're testing (optional)",
+  ["Answer point 1", "Answer point 2"],
+  ["Likely follow-up"],          // optional
+  `optional code snippet`),      // optional
+```
+
+`M` = must prepare, `P` = possible. The topic id must match one in `topics`.
+
+Then add its spoken "Interview answer" to the matching `<role>-spoken.js` file, using the
+exact same question text: `` [`Your question?`, `How you'd say it out loud...`], ``
+Put `[square brackets]` around parts where you should insert your own example. They're highlighted on the page.
+Search, filters, progress tracking and the sidebar pick it up automatically.
 
 ## Add a new page
 
