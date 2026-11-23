@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>LangChain Components</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="shell" data-root="../" data-page="langchain/components" data-spy="1">
+  <nav class="sidebar" id="sidebar" aria-label="Index"></nav>
+  <div class="scrim"></div>
+  <div class="main">
+    <div class="topbar">
+      <button class="icon-btn" id="navToggle" type="button" aria-controls="sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span class="t">Index</span></button>
+      <span class="crumbs"><a href="../index.html">Home</a> / LangChain / Components</span>
+    </div>
+    <main class="content">
+      <header class="page-head">
+        <span class="eyebrow">LangChain · Reference</span>
+        <h1>Components</h1>
+        <p>The parts you'll use most, in plain words. Each card covers what the part is, when to reach for it, a short example and one beginner tip. Search by name or by what you want to do, like "memory" or "pdf".</p>
+      </header>
+
+      <section class="section" id="start">
+        <div class="section-head">
+          <h2>Where each part sits</h2>
+          <p>Roughly the order you meet them when building an app. Click one to jump to it.</p>
+        </div>
+        <div class="chainline" id="orderline"></div>
+<pre># the basics
+pip install langchain langchain-anthropic langgraph
+
+# for RAG (documents, splitting, vector store, embeddings)
+pip install langchain-community langchain-text-splitters langchain-chroma langchain-openai pypdf</pre>
+      </section>
+
+      <div class="finder">
+        <label class="search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input id="q" type="search" placeholder="Search components, e.g. memory, pdf, json" autocomplete="off" aria-label="Search components">
+        </label>
+        <div class="levels" role="group" aria-label="Filter by how often it's used">
+          <button type="button" class="lvl" data-level="all" aria-pressed="true">All</button>
+          <button type="button" class="lvl" data-level="daily" aria-pressed="false"><span class="pill daily">Use daily</span></button>
+          <button type="button" class="lvl" data-level="often" aria-pressed="false"><span class="pill often">Use often</span></button>
+          <button type="button" class="lvl" data-level="know" aria-pressed="false"><span class="pill know">Good to know</span></button>
+        </div>
+        <span class="count" id="count"></span>
+      </div>
+
+      <div id="catalog" class="catalog"></div>
+      <p id="empty" class="muted-p" hidden>No components match. Try a shorter word, or clear the filter.</p>
+
+      <footer>See these parts working together in <a href="under-the-hood.html">Under the hood</a>, and the order to write them in <a href="templates.html">Mental templates</a>.</footer>
+    </main>
+  </div>
+</div>
+<script src="components-data.js"></script>
+<script>
+(function () {
+  const { cats, items } = window.COMPONENTS;
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+  const LEVEL = { daily: "Use daily", often: "Use often", know: "Good to know" };
+
+  document.getElementById("orderline").innerHTML = cats.map((c, i) =>
+    (i ? "<i>→</i>" : "") + `<a class="chip" href="#${c.id}">${esc(c.title)}</a>`).join("");
+
+  document.getElementById("catalog").innerHTML = cats.map((c) => {
+    const cards = items.filter((it) => it.cat === c.id).map((it, k) => {
+      const hay = [it.name, it.alias, it.what, it.when, it.tip, it.code, c.title].join(" ").toLowerCase();
+      return `<article class="comp" data-level="${it.level}" data-search="${esc(hay)}">
+        <header>
+          <div><h3>${esc(it.name)}</h3>${it.alias ? `<span class="alias">${esc(it.alias)}</span>` : ""}</div>
+          <span class="pill ${it.level}">${LEVEL[it.level]}</span>
+        </header>
+        <p>${esc(it.what)}</p>
+        <p class="when"><b>Use it when</b> ${esc(it.when)}</p>
+        <div class="codewrap"><button class="copy" type="button" aria-label="Copy code for ${esc(it.name)}">Copy</button><pre>${esc(it.code)}</pre></div>
+        <p class="tip"><b>Tip</b> ${esc(it.tip)}</p>
+        <span class="pkg">${esc(it.pkg)}</span>
+      </article>`;
+    }).join("");
+    return `<section class="section cat" id="${c.id}">
+      <div class="section-head"><h2>${esc(c.title)}</h2><p>${esc(c.blurb)}</p></div>
+      <div class="comp-grid">${cards}</div>
+    </section>`;
+  }).join("");
+
+  // search + level filter
+  const q = document.getElementById("q");
+  let level = "all";
+  function apply() {
+    const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0;
+    document.querySelectorAll(".cat").forEach((sec) => {
+      let any = false;
+      sec.querySelectorAll(".comp").forEach((card) => {
+        const ok = (level === "all" || card.dataset.level === level) &&
+                   words.every((w) => card.dataset.search.includes(w));
+        card.hidden = !ok;
+        if (ok) { any = true; shown++; }
+      });
+      sec.hidden = !any;
+    });
+    document.getElementById("count").textContent = `${shown} of ${items.length}`;
+    document.getElementById("empty").hidden = shown > 0;
+  }
+  q.addEventListener("input", apply);
+  document.querySelectorAll(".lvl").forEach((b) => b.addEventListener("click", () => {
+    level = b.dataset.level;
+    document.querySelectorAll(".lvl").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    apply();
+  }));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "/" && document.activeElement !== q) { e.preventDefault(); q.focus(); }
+  });
+  apply();
+
+  // copy buttons
+  document.getElementById("catalog").addEventListener("click", async (e) => {
+    const btn = e.target.closest(".copy");
+    if (!btn) return;
+    const pre = btn.nextElementSibling;
+    try {
+      await navigator.clipboard.writeText(pre.textContent);
+      btn.textContent = "Copied";
+    } catch (err) {
+      const r = document.createRange(); r.selectNodeContents(pre);
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      btn.textContent = "Press ⌘C";
+    }
+    setTimeout(() => { btn.textContent = "Copy"; }, 1600);
+  });
+})();
+</script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

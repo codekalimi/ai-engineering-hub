@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>LangChain Mental Templates</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="shell" data-root="../" data-page="langchain/templates" data-spy="1">
+  <nav class="sidebar" id="sidebar" aria-label="Index"></nav>
+  <div class="scrim"></div>
+  <div class="main">
+    <div class="topbar">
+      <button class="icon-btn" id="navToggle" type="button" aria-controls="sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span class="t">Index</span></button>
+      <span class="crumbs"><a href="../index.html">Home</a> / LangChain / Mental templates</span>
+    </div>
+    <main class="content">
+      <header class="page-head">
+        <span class="eyebrow">LangChain · Structure to recall</span>
+        <h1>Mental Templates</h1>
+        <p>scikit-learn has <code>import → fit → predict</code>. LangChain has a template just as small. Learn it once, then plug in add-ons as the problem needs them.</p>
+      </header>
+
+      <!-- 1. Core -->
+      <section class="section" id="core">
+        <div class="section-head">
+          <span class="eyebrow">The one to memorize</span>
+          <h2>The core template</h2>
+          <p>Every LangChain program follows these five steps. There's no <code>fit</code>, because the model is already trained. Writing the prompt does that job instead.</p>
+        </div>
+        <ol class="steps">
+          <li><span class="k">1</span><b>Import</b><span>the parts you need</span></li>
+          <li><span class="k">2</span><b>Model</b><span>choose the LLM</span><code>ChatAnthropic(...)</code></li>
+          <li><span class="k">3</span><b>Prompt</b><span>instructions with {placeholders}</span><code>ChatPromptTemplate</code></li>
+          <li><span class="k">4</span><b>Chain</b><span>connect the parts</span><code>prompt | model | parser</code></li>
+          <li><span class="k">5</span><b>Invoke</b><span>run it with real values</span><code>chain.invoke({...})</code></li>
+        </ol>
+<pre># 1. IMPORT
+from langchain_anthropic import ChatAnthropic
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+# 2. MODEL
+model = ChatAnthropic(model="claude-sonnet-5-5")
+
+# 3. PROMPT
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a {role}."),
+    ("user", "{question}"),
+])
+
+# 4. CHAIN
+chain = prompt | model | StrOutputParser()
+
+# 5. INVOKE
+print(chain.invoke({"role": "math tutor", "question": "What is 2+2?"}))</pre>
+        <div class="oneliner">
+          <span class="label">Remember</span>
+          <p>Everything else in LangChain is this block with one or two extra parts plugged in.</p>
+        </div>
+      </section>
+
+      <!-- 2. Add-ons -->
+      <section class="section" id="addons">
+        <div class="section-head">
+          <span class="eyebrow">What you plug in, and where</span>
+          <h2>The four add-ons</h2>
+          <p>Keep the core chain in the middle. Each need adds one part in a fixed place.</p>
+        </div>
+        <div class="addon-map">
+          <div class="am data"><span class="label">+ Data · RAG</span><b>Retriever</b><span>"Answer from my documents." Goes in before the prompt to fill <code>{context}</code>.</span></div>
+          <div class="am memory"><span class="label">+ Memory</span><b>Message history</b><span>"Remember the chat." A message list, or a checkpointer + <code>thread_id</code>.</span></div>
+          <div class="am core"><span class="label">Core</span><code>prompt | model | parser</code><span>the 5 steps</span></div>
+          <div class="am tools"><span class="label">+ Tools</span><b>Tools</b><span>"Let it act." Bound to the model with <code>bind_tools</code> or <code>create_agent</code>.</span></div>
+          <div class="am control"><span class="label">+ Control flow</span><b>LangGraph</b><span>"Loops, branches, human approval." Wraps everything above.</span></div>
+        </div>
+        <div class="tbl">
+          <table>
+            <thead><tr><th>Need</th><th>Add-on</th><th>Where it plugs in</th></tr></thead>
+            <tbody>
+              <tr><td>Answer from my files</td><td><b>Retriever</b> (RAG)</td><td>Before the prompt, to fill <code>{context}</code></td></tr>
+              <tr><td>Let the model do things</td><td><b>Tools</b></td><td>On the model, with <code>bind_tools</code> or <code>create_agent</code></td></tr>
+              <tr><td>Remember the chat</td><td><b>Memory</b></td><td>A message list, or a checkpointer + <code>thread_id</code></td></tr>
+              <tr><td>Loops, branches, human approval</td><td><b>LangGraph</b></td><td>Around everything</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 3. RAG -->
+      <section class="section" id="rag-template">
+        <div class="section-head">
+          <span class="eyebrow">Variation A</span>
+          <h2>RAG template: answer from my documents</h2>
+          <p>Two phases. Indexing runs once; asking runs on every question and is the core template with a retriever in front.</p>
+        </div>
+        <div class="variant">
+          <div class="chainline"><span class="tag">Index · once</span><span>Load</span><i>→</i><span>Split</span><i>→</i><span>Embed</span><i>→</i><span>Store</span></div>
+          <div class="chainline"><span class="tag">Ask · always</span><span>Retrieve</span><i>→</i><span>Prompt</span><i>→</i><span>Model</span><i>→</i><span>Answer</span></div>
+<pre># INDEX
+docs      = PyPDFLoader("policy.pdf").load()                                   # Load
+chunks    = RecursiveCharacterTextSplitter(chunk_size=1000).split_documents(docs)  # Split
+store     = Chroma.from_documents(chunks, embeddings)                          # Embed + Store
+retriever = store.as_retriever()
+
+# ASK: the same 5-step skeleton, with a retriever in front
+prompt = ChatPromptTemplate.from_template(
+    "Answer using this context:\n{context}\n\nQuestion: {question}")
+chain = {"context": retriever, "question": RunnablePassthrough()} | prompt | model | StrOutputParser()
+chain.invoke("Can I get a refund?")</pre>
+          <p>See it move step by step in <a href="under-the-hood.html#rag">Under the hood · RAG</a>.</p>
+        </div>
+      </section>
+
+      <!-- 4. Agent -->
+      <section class="section" id="agent-template">
+        <div class="section-head">
+          <span class="eyebrow">Variation B</span>
+          <h2>Agent template: let it use tools</h2>
+          <p>Write tools as plain functions with a clear docstring, hand them to <code>create_agent</code>, and run it. The tool-calling loop is built for you.</p>
+        </div>
+        <div class="variant">
+          <div class="chainline"><span>Tools</span><i>→</i><span>Model</span><i>→</i><span>create_agent</span><i>→</i><span>invoke</span></div>
+<pre>@tool
+def get_weather(city: str) -> str:
+    """Get the current weather for a city."""
+    ...
+
+agent = create_agent(model, tools=[get_weather], system_prompt="You are helpful.")
+agent.invoke({"messages": [("user", "Weather in Paris?")]})</pre>
+          <p>See the loop in <a href="under-the-hood.html#tools">Tool calling</a> and <a href="under-the-hood.html#agent">Agent loop</a>.</p>
+        </div>
+      </section>
+
+      <!-- 5. LangGraph -->
+      <section class="section" id="graph-template">
+        <div class="section-head">
+          <span class="eyebrow">Variation C</span>
+          <h2>LangGraph template: my own workflow</h2>
+          <p>LangGraph has its own five steps. Remember them as <b>S-N-E-C-R</b>: State, Nodes, Edges, Compile, Run.</p>
+        </div>
+        <ol class="steps">
+          <li><span class="k">S</span><b>State</b><span>what the graph remembers</span><code>class MyState(TypedDict)</code></li>
+          <li><span class="k">N</span><b>Nodes</b><span>functions that do the work</span><code>def node(state): return {...}</code></li>
+          <li><span class="k">E</span><b>Edges</b><span>arrows between nodes</span><code>add_conditional_edges</code></li>
+          <li><span class="k">C</span><b>Compile</b><span>build it, add memory</span><code>graph.compile(checkpointer=...)</code></li>
+          <li><span class="k">R</span><b>Run</b><span>invoke with a thread_id</span><code>app.invoke(input, config)</code></li>
+        </ol>
+<pre>class State(TypedDict):                              # 1. STATE
+    messages: Annotated[list, add_messages]
+
+def chatbot(state: State):                           # 2. NODES
+    return {"messages": [model.invoke(state["messages"])]}
+
+graph = StateGraph(State)
+graph.add_node("chatbot", chatbot)
+graph.add_edge(START, "chatbot")                     # 3. EDGES
+graph.add_edge("chatbot", END)
+
+app = graph.compile(checkpointer=InMemorySaver())    # 4. COMPILE
+
+app.invoke({"messages": [("user", "Hi!")]},          # 5. RUN
+           {"configurable": {"thread_id": "1"}})</pre>
+        <p>A bigger example with a loop and human approval: <a href="under-the-hood.html#langgraph">Under the hood · LangGraph</a>.</p>
+      </section>
+
+      <!-- 6. Compare -->
+      <section class="section" id="compare">
+        <div class="section-head">
+          <span class="eyebrow">Map it to what you know</span>
+          <h2>Next to scikit-learn and an API controller</h2>
+          <p><code>Pipeline</code> in scikit-learn and <code>|</code> in LangChain are the same idea: steps joined so each output feeds the next. And just as every scikit-learn model has <code>fit</code> and <code>predict</code>, every LangChain part has <code>invoke</code>, <code>batch</code> and <code>stream</code>.</p>
+          <p>An API controller is even closer to LangGraph: the request shape is the <b>state</b>, the helper functions are the <b>nodes</b>, and the order of calls plus the <code>if</code>/<code>else</code> are the <b>edges</b>.</p>
+        </div>
+        <div class="tbl">
+          <table>
+            <thead><tr><th>scikit-learn</th><th>API controller (FastAPI)</th><th>LangChain chain</th><th>LangGraph</th></tr></thead>
+            <tbody>
+              <tr><td><code>import</code></td><td><code>import</code></td><td><code>import</code></td><td><code>import</code></td></tr>
+              <tr><td>Load and prepare data</td><td>Define the <b>request shape</b> (<code>OrderRequest</code>)</td><td>Choose a <b>model</b></td><td>Define the <b>state</b></td></tr>
+              <tr><td>Choose a model, e.g. <code>RandomForest()</code></td><td>Write <b>helper functions</b> (<code>get_user</code>, <code>charge_card</code>)</td><td>Write a <b>prompt</b></td><td>Write the <b>nodes</b> (functions)</td></tr>
+              <tr><td><code>Pipeline([...])</code></td><td>Controller body: <b>call helpers in order</b>, with <code>if</code>/<code>else</code></td><td><code>prompt | model | parser</code></td><td>Add the <b>edges</b> (conditional edge = <code>if</code>)</td></tr>
+              <tr><td><code>.fit(X, y)</code></td><td><code>app = FastAPI()</code> + <code>@app.post(...)</code></td><td>None, already trained</td><td><code>.compile()</code></td></tr>
+              <tr><td><code>.predict(X)</code></td><td><code>POST /orders</code> → <code>return</code> response</td><td><code>.invoke(input)</code></td><td><code>.invoke(input, config)</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Same logic, two ways</h3>
+        <p class="muted-p">Placing an order: look up the user, check stock, charge the card, return the result. The numbers in the comments show which part matches which.</p>
+        <div class="codegrid">
+          <div class="codecard">
+            <span class="label">API controller (what you already write)</span>
+<pre># ① import
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from services import get_user, check_stock, charge_card
+
+# ② the data shape
+class OrderRequest(BaseModel):
+    user_id: int
+    item_id: int
+
+app = FastAPI()                            # ⑤ build the app
+
+@app.post("/orders")                       # ⑤ register the route
+def create_order(req: OrderRequest):
+    user = get_user(req.user_id)           # ③ call a function
+    if not check_stock(req.item_id):       # ④ logic: branch
+        raise HTTPException(409, "Out of stock")
+    payment = charge_card(user, req.item_id)   # ③ call another
+    return {"status": "ok",                # ⑥ return
+            "payment_id": payment.id}</pre>
+          </div>
+          <div class="codecard">
+            <span class="label">Same thing as a LangGraph</span>
+<pre># ① import
+from typing import TypedDict
+from langgraph.graph import StateGraph, START, END
+
+# ② the data shape = state
+class OrderState(TypedDict):
+    user_id: int
+    item_id: int
+    in_stock: bool
+    payment_id: str
+
+# ③ each helper call becomes a node
+def check(state):
+    return {"in_stock": check_stock(state["item_id"])}
+
+def charge(state):
+    user = get_user(state["user_id"])
+    return {"payment_id": charge_card(user, state["item_id"]).id}
+
+graph = StateGraph(OrderState)
+graph.add_node("check", check)
+graph.add_node("charge", charge)
+graph.add_edge(START, "check")
+graph.add_conditional_edges("check",       # ④ the if/else
+    lambda s: "charge" if s["in_stock"] else END)
+graph.add_edge("charge", END)
+
+app = graph.compile()                      # ⑤ build it
+app.invoke({"user_id": 7, "item_id": 42})  # ⑥ run → final state</pre>
+          </div>
+        </div>
+        <p class="muted-p">For plain business logic like this, keep the controller: it's simpler. LangGraph is worth it when a step is an LLM making a decision, when the flow loops, or when it must pause for a human and resume later.</p>
+
+        <h3>Where LangChain sits in a real API</h3>
+        <p class="muted-p">In practice you don't replace the controller. The chain or graph is one more function the controller calls, like <code>get_user</code>.</p>
+<pre>@app.post("/ask")
+async def ask(req: AskRequest):
+    user = get_user(req.user_id)                        # normal helper
+    if not user.is_active:                              # normal logic
+        raise HTTPException(403, "Inactive account")
+
+    answer = await chain.ainvoke({                      # ← LangChain is just another call
+        "question": req.question,
+        "plan": user.plan,
+    })
+    save_to_history(user.id, req.question, answer)      # normal helper
+    return {"answer": answer}                           # normal return</pre>
+      </section>
+
+      <!-- 7. Recall -->
+      <section class="section" id="recall">
+        <div class="section-head">
+          <span class="eyebrow">Before you write code</span>
+          <h2>10-second recall</h2>
+        </div>
+<pre class="recall">CHAIN:     Model → Prompt → Chain → Invoke
+  + data?    put a Retriever before the prompt      (RAG)
+  + actions? give the model Tools                   (Agent)
+  + memory?  keep messages / use a thread_id
+  + control? wrap it in a graph: State → Nodes → Edges → Compile → Run</pre>
+        <p>Facing a new problem, ask these four questions in order. The answers tell you which template to use.</p>
+        <ol class="questions">
+          <li><span class="k">1</span><div><b>What does the model need to know?</b><span>Write the prompt. If the answer is in your documents, add a retriever.</span></div></li>
+          <li><span class="k">2</span><div><b>What does it need to do?</b><span>If it must act or look things up, add tools.</span></div></li>
+          <li><span class="k">3</span><div><b>What should it remember?</b><span>For a conversation, add memory: message history or a checkpointer.</span></div></li>
+          <li><span class="k">4</span><div><b>Straight line, or does it loop or wait?</b><span>Straight: a chain. Loops, retries or human approval: LangGraph.</span></div></li>
+        </ol>
+      </section>
+
+      <footer>Back to <a href="under-the-hood.html">Under the hood</a> to see each template in motion.</footer>
+    </main>
+  </div>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

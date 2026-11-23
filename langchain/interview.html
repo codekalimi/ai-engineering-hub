@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>LangChain Interview Prep</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="shell" data-root="../" data-page="langchain/interview" data-spy="1">
+  <nav class="sidebar" id="sidebar" aria-label="Index"></nav>
+  <div class="scrim"></div>
+  <div class="main">
+    <div class="topbar">
+      <button class="icon-btn" id="navToggle" type="button" aria-controls="sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span class="t">Index</span></button>
+      <span class="crumbs"><a href="../index.html">Home</a> / LangChain / Interview prep</span>
+    </div>
+    <main class="content">
+      <header class="page-head">
+        <span class="eyebrow">LangChain · Interview</span>
+        <h1>Interview Prep</h1>
+        <p>The classes and methods interviewers ask about most. For each class, learn the 30-second answer first, then scan the methods table. Use the questions to test yourself: try answering out loud before you click to reveal the model answer.</p>
+      </header>
+
+      <section class="section" id="most-asked">
+        <div class="section-head">
+          <span class="eyebrow">Start here</span>
+          <h2>Most-asked questions</h2>
+          <p>If you only have an hour, practise these. Each link opens its answer further down the page.</p>
+        </div>
+        <ol class="top-qs" id="topQs"></ol>
+      </section>
+
+      <div class="finder">
+        <label class="search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input id="q" type="search" placeholder="Search classes, methods or questions, e.g. stream, memory, chunk" autocomplete="off" aria-label="Search">
+        </label>
+        <button class="btn" id="toggleAll" type="button">Show all answers</button>
+        <span class="count" id="count"></span>
+      </div>
+
+      <div id="catalog" class="catalog"></div>
+      <p id="empty" class="muted-p" hidden>Nothing matches. Try a shorter word.</p>
+
+      <footer>For plain-English descriptions and copy-ready snippets, see <a href="components.html">Components</a>. To see how the pieces move, see <a href="under-the-hood.html">Under the hood</a>. Method names follow LangChain v1 and LangGraph v1.</footer>
+    </main>
+  </div>
+</div>
+<script src="interview-data.js"></script>
+<script>
+(function () {
+  const { groups, classes } = window.INTERVIEW;
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+
+  // Most-asked list
+  const top = [];
+  classes.forEach((c) => c.qa.forEach((qa, i) => { if (qa[2]) top.push({ c, i, q: qa[0] }); }));
+  document.getElementById("topQs").innerHTML = top.map((t) =>
+    `<li><a href="#q-${t.c.id}-${t.i}">${esc(t.q)}</a><span>${esc(t.c.name)}</span></li>`).join("");
+
+  // Catalog
+  document.getElementById("catalog").innerHTML = groups.map((g) => {
+    const cards = classes.filter((c) => c.group === g.id).map((c) => {
+      const hay = [c.name, c.alias, c.imp, c.say, c.gotcha, ...c.methods.flat(), ...c.qa.map((x) => x[0] + " " + x[1])].join(" ").toLowerCase();
+      return `<article class="iv" id="${c.id}" data-search="${esc(hay)}">
+        <header class="iv-head">
+          <h3>${esc(c.name)}</h3>
+          ${c.alias ? `<span class="alias">${esc(c.alias)}</span>` : ""}
+        </header>
+        <pre class="imp">${esc(c.imp)}</pre>
+        <div class="say"><span class="label">Say this in 30 seconds</span><p>${esc(c.say)}</p></div>
+        <div class="tbl"><table>
+          <thead><tr><th>Method / usage</th><th>Returns</th><th>What to know</th></tr></thead>
+          <tbody>${c.methods.map((m) => `<tr><td><code>${esc(m[0])}</code></td><td class="ret">${esc(m[1])}</td><td>${esc(m[2])}</td></tr>`).join("")}</tbody>
+        </table></div>
+        <div class="qa">
+          <span class="label">Likely questions</span>
+          ${c.qa.map((qa, i) => `<details id="q-${c.id}-${i}"><summary>${qa[2] ? '<span class="hot">Most asked</span>' : ""}${esc(qa[0])}</summary><p>${esc(qa[1])}</p></details>`).join("")}
+        </div>
+        <p class="gotcha"><b>Gotcha</b> ${esc(c.gotcha)}</p>
+      </article>`;
+    }).join("");
+    return `<section class="section grp" id="${g.id}"><div class="section-head"><h2>${esc(g.title)}</h2></div><div class="iv-list">${cards}</div></section>`;
+  }).join("");
+
+  // Open an answer when its link is followed
+  function openFromHash() {
+    const el = location.hash && document.getElementById(location.hash.slice(1));
+    if (el && el.tagName === "DETAILS") { el.open = true; el.scrollIntoView({ block: "center" }); }
+  }
+  window.addEventListener("hashchange", openFromHash);
+
+  // Show / hide all answers
+  const btn = document.getElementById("toggleAll");
+  btn.addEventListener("click", () => {
+    const open = btn.textContent.startsWith("Show");
+    document.querySelectorAll(".qa details").forEach((d) => { d.open = open; });
+    btn.textContent = open ? "Hide all answers" : "Show all answers";
+  });
+
+  // Search
+  const q = document.getElementById("q");
+  function apply() {
+    const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0;
+    document.querySelectorAll(".grp").forEach((sec) => {
+      let any = false;
+      sec.querySelectorAll(".iv").forEach((card) => {
+        const ok = words.every((w) => card.dataset.search.includes(w));
+        card.hidden = !ok;
+        if (ok) { any = true; shown++; }
+      });
+      sec.hidden = !any;
+    });
+    document.getElementById("count").textContent = `${shown} of ${classes.length} classes`;
+    document.getElementById("empty").hidden = shown > 0;
+  }
+  q.addEventListener("input", apply);
+  document.addEventListener("keydown", (e) => { if (e.key === "/" && document.activeElement !== q) { e.preventDefault(); q.focus(); } });
+  apply();
+  openFromHash();
+})();
+</script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

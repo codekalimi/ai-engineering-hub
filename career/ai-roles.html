@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>AI Roles for Backend Engineers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="shell" data-root="../" data-page="career/ai-roles" data-spy="1">
+  <nav class="sidebar" id="sidebar" aria-label="Index"></nav>
+  <div class="scrim"></div>
+  <div class="main">
+    <div class="topbar">
+      <button class="icon-btn" id="navToggle" type="button" aria-controls="sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span class="t">Index</span></button>
+      <span class="crumbs"><a href="../index.html">Home</a> / Career / AI roles</span>
+    </div>
+    <main class="content">
+      <header class="page-head">
+        <span class="eyebrow">Career · Senior to Staff level</span>
+        <h1>AI Roles for Backend Engineers</h1>
+        <p>Four AI roles, what each one does, and how to position yourself for each. Written for a profile with 7 years of backend work in Node.js and Python, plus hands-on experience across the AI skill set: LLM apps, RAG, agents, evals, model serving, fine-tuning, cloud and Kubernetes.</p>
+      </header>
+
+      <!-- Overview -->
+      <section class="section" id="roles-overview">
+        <div class="section-head">
+          <span class="eyebrow">At a glance</span>
+          <h2>Compare the roles</h2>
+          <p>You already have the skills for all four. What separates them now is which kind of <b>evidence</b> each employer wants to see. Job titles vary between companies, so always read the job description, not just the title.</p>
+        </div>
+        <div class="tbl">
+          <table>
+            <thead><tr><th>Role</th><th>In one line</th><th>Level to target</th><th>Your fit</th></tr></thead>
+            <tbody>
+              <tr><td><a href="#ai-engineer"><b>AI Engineer</b></a></td><td>Builds product features on top of LLMs: RAG, agents, tool use, evals.</td><td>Senior → Staff</td><td><span class="gap ready">Ready now</span></td></tr>
+              <tr><td><a href="#fde"><b>Forward Deployed AI Engineer</b></a></td><td>Works inside a customer's team to build and ship AI on their data and systems.</td><td>Senior FDE</td><td><span class="gap ready">Ready now</span></td></tr>
+              <tr><td><a href="#ai-infra"><b>AI Infrastructure Engineer</b></a></td><td>Runs the platform that trains and serves models: GPUs, inference, scaling, cost.</td><td>Senior</td><td><span class="gap ready">Ready, if you've run serving in production</span></td></tr>
+              <tr><td><a href="#ai-architect"><b>AI Architect</b></a></td><td>Designs AI systems across a company: patterns, platforms, governance, trade-offs.</td><td>AI / Solutions Architect</td><td><span class="gap close">Within reach: show design ownership</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="oneliner">
+          <span class="label">Recommendation for your profile</span>
+          <p><b>Apply at Staff AI Engineer level, and in parallel to AI Architect roles.</b> Full-stack AI skills on top of 7 years of backend production work is a rare combination. Most AI candidates have either the model side or the production side, not both. Stop learning breadth: from here, what gets offers is <b>proof</b>. That means one or two flagship systems with real numbers, design documents others followed, and clear stories about decisions you led. <b>Senior FDE</b> is a strong option if you enjoy customers, and these roles often pay well for exactly this mix. Pick <b>AI Infrastructure</b> if your best production stories are about serving, GPUs and cost.</p>
+        </div>
+      </section>
+
+      <!-- Level -->
+      <section class="section" id="level">
+        <div class="section-head">
+          <span class="eyebrow">Which title to aim for</span>
+          <h2>Senior vs Staff vs Architect</h2>
+          <p>At 7 years with this skill set, the title depends less on what you know and more on the <b>scope</b> of what you've owned. Use this to decide where to apply and which stories to tell.</p>
+        </div>
+        <div class="tbl">
+          <table>
+            <thead><tr><th></th><th>Senior AI Engineer</th><th>Staff AI Engineer</th><th>AI Architect</th></tr></thead>
+            <tbody>
+              <tr><td><b>Scope</b></td><td>A feature or one system</td><td>Several systems, or a platform used by many teams</td><td>AI across the organization</td></tr>
+              <tr><td><b>Technical work</b></td><td>Builds and ships reliably, with evals and tracing</td><td>Sets direction; builds shared pieces (LLM gateway, eval platform, RAG service)</td><td>Reference architectures; model, vendor and platform strategy</td></tr>
+              <tr><td><b>Influence</b></td><td>Mentors teammates</td><td>Aligns several teams; writes design docs others follow</td><td>Standards, governance, advising leadership</td></tr>
+              <tr><td><b>Evidence they want</b></td><td>A shipped AI feature with quality and cost numbers</td><td>A cross-team AI initiative you led, with business impact</td><td>Architecture decisions and their outcomes, across teams</td></tr>
+              <tr><td><b>Interview bar</b></td><td>Coding + LLM system design</td><td>Deep system design + a leadership / strategy round</td><td>Architecture case study + stakeholder scenarios</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- AI Engineer -->
+      <section class="section" id="ai-engineer">
+        <article class="role">
+          <header class="role-head">
+            <div><span class="eyebrow">Role 1</span><h2>AI Engineer</h2><p>Also called: LLM Engineer, Applied AI Engineer, GenAI Engineer</p></div>
+            <span class="gap ready">Ready now · target Staff</span>
+          </header>
+          <p class="mission">Turns LLMs into reliable product features. Mostly not training models: building the system around them, including retrieval, tools, prompts, evaluation, cost and latency.</p>
+          <div class="role-grid">
+            <div><h3>What you'd do</h3><ul>
+              <li>Build RAG over company documents, and agents that call internal APIs</li>
+              <li>Design prompts and structured outputs, and handle model failures</li>
+              <li>Build evaluation sets and run them on every change</li>
+              <li>Stream responses to UIs, cache, route between models, control cost</li>
+              <li>Defend against prompt injection and data leaks</li>
+            </ul></div>
+            <div><h3>Core skills</h3><ul>
+              <li>LLM basics: tokens, context windows, temperature, embeddings</li>
+              <li>RAG: chunking, hybrid search, reranking, vector DBs</li>
+              <li>Tool calling and agents (LangGraph or plain SDKs)</li>
+              <li>Evals: datasets, LLM-as-judge, regression testing</li>
+              <li>Python + FastAPI or TypeScript + Node; async and streaming (SSE)</li>
+              <li>Observability: LangSmith or similar tracing</li>
+            </ul></div>
+            <div><h3>Staff level adds</h3><ul>
+              <li>Shared AI platform pieces: LLM gateway, eval service, prompt registry</li>
+              <li>Technical direction for several product teams</li>
+              <li>When to fine-tune, self-host or use an API, decided with numbers</li>
+              <li>Hiring, mentoring and setting the bar for AI work</li>
+            </ul></div>
+            <div><h3>At this level they expect</h3><ul>
+              <li>Owning AI systems end to end, from design to production</li>
+              <li>Trade-offs with numbers: quality vs latency vs cost</li>
+              <li>Setting the team's eval and tracing practice</li>
+              <li>Designs other teams adopt</li>
+            </ul></div>
+          </div>
+          <div class="fit">
+            <div><span class="label">Your strength here</span><p>You cover the whole path from the API to the model: product integration, retrieval, agents, evals, serving and fine-tuning. Most candidates cover only part of it, so you can credibly own an AI platform rather than one feature.</p></div>
+            <div><span class="label">What to prove</span><p>A flagship system with before-and-after numbers (accuracy, p95 latency, cost per request), and one cross-team story: a shared component or standard you introduced that other teams use.</p></div>
+          </div>
+          <p class="interviews"><b>Interviews test</b> Python coding · LLM system design ("design a support bot over 1M docs with permissions") · eval strategy · debugging a bad answer · at Staff: technical strategy and influence.</p>
+        </article>
+      </section>
+
+      <!-- FDE -->
+      <section class="section" id="fde">
+        <article class="role">
+          <header class="role-head">
+            <div><span class="eyebrow">Role 2</span><h2>Forward Deployed AI Engineer</h2><p>Also called: FDE, Solutions Engineer (AI), Customer AI Engineer</p></div>
+            <span class="gap ready">Ready now · target Senior FDE</span>
+          </header>
+          <p class="mission">An engineer embedded with customers. You learn their problem, build an AI solution on their systems and data, get it into production, and feed what you learn back to the product team. Half engineer, half consultant.</p>
+          <div class="role-grid">
+            <div><h3>What you'd do</h3><ul>
+              <li>Scope a customer problem into something buildable in weeks</li>
+              <li>Prototype fast, then harden it for production</li>
+              <li>Integrate with their stack: APIs, databases, SSO, data warehouses</li>
+              <li>Run evals on the customer's own data and show results</li>
+              <li>Present to engineers and executives; sometimes travel</li>
+            </ul></div>
+            <div><h3>Core skills</h3><ul>
+              <li>Everything in the AI Engineer role, applied quickly</li>
+              <li>Integration work: REST, webhooks, auth (OAuth, SAML), ETL</li>
+              <li>Cloud deployment (AWS, GCP, Azure), Docker</li>
+              <li>Debugging unfamiliar codebases and environments</li>
+              <li>Clear writing and speaking; managing expectations</li>
+            </ul></div>
+            <div><h3>Nice to have</h3><ul>
+              <li>Domain knowledge (finance, healthcare, legal)</li>
+              <li>Security reviews and compliance (SOC 2, GDPR, PII)</li>
+              <li>Some frontend, for demos</li>
+            </ul></div>
+            <div><h3>At senior level they expect</h3><ul>
+              <li>Leading a customer engagement on your own</li>
+              <li>Saying no, or "not yet", to unrealistic asks, with reasons</li>
+              <li>Turning repeated customer needs into product feedback</li>
+            </ul></div>
+          </div>
+          <div class="fit">
+            <div><span class="label">Your strength here</span><p>Customer environments are messy: odd APIs, private networks, compliance limits, sometimes self-hosted models. Your breadth, from integrations through to serving open models with vLLM, lets you handle all of that without waiting on other teams.</p></div>
+            <div><span class="label">What to prove</span><p>Customer-facing evidence: an engagement you scoped and led, a stakeholder you managed, a demo you gave. If you lack it, write up a past project as a case study (problem → scope → build → measured result) and record a 5-minute demo.</p></div>
+          </div>
+          <p class="interviews"><b>Interviews test</b> a customer case ("a bank wants AI on its support tickets: what do you do in week 1?") · live prototyping · communication · decomposing vague problems.</p>
+        </article>
+      </section>
+
+      <!-- AI Infra -->
+      <section class="section" id="ai-infra">
+        <article class="role">
+          <header class="role-head">
+            <div><span class="eyebrow">Role 3</span><h2>AI Infrastructure Engineer</h2><p>Also called: ML Platform Engineer, ML Infra, Inference Engineer, MLOps (overlaps)</p></div>
+            <span class="gap ready">Ready, with production serving stories</span>
+          </header>
+          <p class="mission">Builds and runs the platform underneath: GPU clusters, model serving, training pipelines, autoscaling and cost. The customers are other engineers and researchers.</p>
+          <div class="role-grid">
+            <div><h3>What you'd do</h3><ul>
+              <li>Serve models at scale with low latency (batching, caching, quantization)</li>
+              <li>Run GPU clusters on Kubernetes; schedule and autoscale workloads</li>
+              <li>Build model gateways: routing, rate limits, fallbacks, usage metering</li>
+              <li>Support distributed training and fine-tuning jobs</li>
+              <li>Track GPU utilization and cut cost</li>
+            </ul></div>
+            <div><h3>Core skills</h3><ul>
+              <li>Kubernetes in depth, Docker, Terraform, a cloud provider</li>
+              <li>Inference servers: vLLM, TGI, Triton, SGLang</li>
+              <li>GPU basics: memory, KV cache, batching, quantization</li>
+              <li>Distributed systems, networking, performance profiling</li>
+              <li>Python + Go (sometimes Rust or C++)</li>
+            </ul></div>
+            <div><h3>Nice to have</h3><ul>
+              <li>PyTorch internals, distributed training (FSDP, DeepSpeed), Ray</li>
+              <li>CUDA basics</li>
+              <li>MLOps tools: MLflow, model registries, feature stores</li>
+            </ul></div>
+            <div><h3>At senior level they expect</h3><ul>
+              <li>Designing a serving platform for many teams and models</li>
+              <li>Capacity planning and cost models for GPUs</li>
+              <li>On-call ownership of production inference</li>
+            </ul></div>
+          </div>
+          <div class="fit">
+            <div><span class="label">Your strength here</span><p>You understand both sides: the apps that call the models and the serving underneath. That makes you good at gateways, routing, metering and capacity planning, the parts that sit between product teams and GPUs.</p></div>
+            <div><span class="label">What to prove</span><p>Numbers from real load: tokens per second, p95 time to first token, GPU utilization, cost per 1M tokens, and what you changed to improve them. Infra interviewers probe depth on KV cache, batching and autoscaling. Be ready to go down to the details.</p></div>
+          </div>
+          <p class="interviews"><b>Interviews test</b> systems design ("serve a 70B model to 1,000 requests/sec") · Kubernetes and Linux depth · performance debugging · coding in Python or Go.</p>
+        </article>
+      </section>
+
+      <!-- AI Architect -->
+      <section class="section" id="ai-architect">
+        <article class="role">
+          <header class="role-head">
+            <div><span class="eyebrow">Role 4</span><h2>AI Architect</h2><p>Also called: AI Solutions Architect, GenAI Architect, Enterprise AI Architect</p></div>
+            <span class="gap close">Within reach</span>
+          </header>
+          <p class="mission">Decides how AI fits into a company's systems. Sets reference architectures, chooses platforms and models, and balances quality, cost, security and compliance across many teams. More design and influence, less day-to-day coding.</p>
+          <div class="role-grid">
+            <div><h3>What you'd do</h3><ul>
+              <li>Write reference architectures for RAG, agents and model gateways</li>
+              <li>Make build-vs-buy and model or vendor decisions</li>
+              <li>Define data governance: PII, access control, retention, audit</li>
+              <li>Review team designs; set standards for evals and monitoring</li>
+              <li>Explain trade-offs and cost to leadership</li>
+            </ul></div>
+            <div><h3>Core skills</h3><ul>
+              <li>Broad and deep knowledge of LLM application patterns</li>
+              <li>Cloud AI platforms (Bedrock, Vertex AI, Azure AI Foundry)</li>
+              <li>Security: prompt injection, data leakage, tenant isolation</li>
+              <li>Compliance awareness (GDPR, EU AI Act, industry rules)</li>
+              <li>Cost modelling; writing architecture decision records</li>
+            </ul></div>
+            <div><h3>Nice to have</h3><ul>
+              <li>Cloud architect certifications</li>
+              <li>Enterprise integration (event-driven, data platforms)</li>
+              <li>Pre-sales or consulting experience</li>
+            </ul></div>
+            <div><h3>Usually expected</h3><ul>
+              <li>Often 10+ years, or a strong lead record. Many companies flex this for proven AI depth</li>
+              <li>Real AI systems you designed and shipped</li>
+              <li>Influencing teams you don't manage</li>
+            </ul></div>
+          </div>
+          <div class="fit">
+            <div><span class="label">Your strength here</span><p>An architect has to judge every layer: product integration, retrieval, agents, serving, fine-tuning, cloud and security. You've worked at all of them, which is exactly the breadth this role needs, and it's why 7 years can be enough.</p></div>
+            <div><span class="label">What to prove</span><p>Design ownership: 2–3 architecture decision records or design docs (anonymized), a reference architecture diagram, and stories where you influenced teams you didn't manage. Consultancies and mid-size companies are the quickest way in; large enterprises weigh years more heavily.</p></div>
+          </div>
+          <p class="interviews"><b>Interviews test</b> an architecture case study · trade-off reasoning (hosted API vs self-hosted vs fine-tuned) · security and compliance scenarios · presenting to non-engineers.</p>
+        </article>
+      </section>
+
+      <!-- Skill matrix -->
+      <section class="section" id="skill-matrix">
+        <div class="section-head">
+          <span class="eyebrow">Side by side</span>
+          <h2>Skill matrix</h2>
+          <p>How heavily each role weighs each skill. You have all of them, so use this to decide which skills to <b>lead with</b> on your resume and in interviews for each role. <span class="lv core">Core</span> = tested in interviews. <span class="lv use">Useful</span> = expected to know. <span class="lv light">Light</span> = basics are enough.</p>
+        </div>
+        <div class="tbl">
+          <table class="matrix">
+            <thead><tr><th>Skill</th><th>AI Engineer</th><th>Forward Deployed</th><th>AI Infra</th><th>AI Architect</th></tr></thead>
+            <tbody>
+              <tr><td>Python</td><td><span class="lv core">Core</span></td><td><span class="lv core">Core</span></td><td><span class="lv core">Core</span></td><td><span class="lv use">Useful</span></td></tr>
+              <tr><td>Node.js / TypeScript</td><td><span class="lv use">Useful</span></td><td><span class="lv use">Useful</span></td><td><span class="lv light">Light</span></td><td><span class="lv light">Light</span></td></tr>
+              <tr><td>LLM basics (tokens, context, sampling)</td><td><span class="lv core">Core</span></td><td><span class="lv core">Core</span></td><td><span class="lv core">Core</span></td><td><span class="lv core">Core</span></td></tr>
+              <tr><td>Prompting and structured output</td><td><span class="lv core">Core</span></td><td><span class="lv core">Core</span></td><td><span class="lv light">Light</span></td><td><span class="lv use">Useful</span></td></tr>
+              <tr><td>RAG and vector databases</td><td><span class="lv core">Core</span></td><td><span class="lv core">Core</span></td><td><span class="lv use">Useful</span></td><td><span class="lv core">Core</span></td></tr>
+              <tr><td>Agents and tool calling (LangGraph)</td><td><span class="lv core">Core</span></td><td><span class="lv core">Core</span></td><td><span class="lv light">Light</span></td><td><span class="lv core">Core</span></td></tr>
+              <tr><td>Evals and testing</td><td><span class="lv core">Core</span></td><td><span class="lv core">Core</span></td><td><span class="lv use">Useful</span></td><td><span class="lv core">Core</span></td></tr>
+              <tr><td>APIs and integrations</td><td><span class="lv core">Core</span></td><td><span class="lv core">Core</span></td><td><span class="lv use">Useful</span></td><td><span class="lv use">Useful</span></td></tr>
+              <tr><td>Kubernetes and Docker</td><td><span class="lv use">Useful</span></td><td><span class="lv use">Useful</span></td><td><span class="lv core">Core</span></td><td><span class="lv use">Useful</span></td></tr>
+              <tr><td>GPUs and model serving (vLLM)</td><td><span class="lv light">Light</span></td><td><span class="lv light">Light</span></td><td><span class="lv core">Core</span></td><td><span class="lv use">Useful</span></td></tr>
+              <tr><td>Fine-tuning and ML training</td><td><span class="lv use">Useful</span></td><td><span class="lv light">Light</span></td><td><span class="lv core">Core</span></td><td><span class="lv use">Useful</span></td></tr>
+              <tr><td>Cloud (AWS, GCP, Azure)</td><td><span class="lv use">Useful</span></td><td><span class="lv core">Core</span></td><td><span class="lv core">Core</span></td><td><span class="lv core">Core</span></td></tr>
+              <tr><td>Security, privacy, compliance</td><td><span class="lv use">Useful</span></td><td><span class="lv core">Core</span></td><td><span class="lv use">Useful</span></td><td><span class="lv core">Core</span></td></tr>
+              <tr><td>Cost and latency optimization</td><td><span class="lv core">Core</span></td><td><span class="lv use">Useful</span></td><td><span class="lv core">Core</span></td><td><span class="lv core">Core</span></td></tr>
+              <tr><td>Customer communication</td><td><span class="lv use">Useful</span></td><td><span class="lv core">Core</span></td><td><span class="lv light">Light</span></td><td><span class="lv core">Core</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Your edge -->
+      <section class="section" id="your-edge">
+        <div class="section-head">
+          <span class="eyebrow">How to frame 7 years</span>
+          <h2>Your backend edge</h2>
+          <p>Many AI candidates can build a demo. Fewer can run it in production. Your backend years are the proof that you can, so connect each one to its AI equivalent on your resume and in interviews.</p>
+        </div>
+        <div class="tbl">
+          <table>
+            <thead><tr><th>What you've done</th><th>The AI equivalent</th><th>Say it like this</th></tr></thead>
+            <tbody>
+              <tr><td>REST / GraphQL APIs</td><td>Tools for agents; model gateways</td><td>"I design the APIs agents call, with clear schemas and safe permissions."</td></tr>
+              <tr><td>Async I/O, Node event loop</td><td><code>ainvoke</code>, concurrent LLM calls, streaming (SSE)</td><td>"LLM calls are I/O-bound, so I run them concurrently and stream tokens."</td></tr>
+              <tr><td>PostgreSQL, indexing</td><td>pgvector, hybrid search, metadata filters</td><td>"Vector search is another index with its own trade-offs."</td></tr>
+              <tr><td>Redis caching</td><td>Prompt caching, semantic caching</td><td>"I cache repeated prompts and similar questions to cut cost and latency."</td></tr>
+              <tr><td>Queues, background jobs</td><td>Batch embedding, long agent runs, document ingestion</td><td>"Indexing is a pipeline: queue, batch, retry, make it idempotent."</td></tr>
+              <tr><td>Unit and integration tests</td><td>Evals and regression datasets</td><td>"Evals are tests for non-deterministic output, run on every change."</td></tr>
+              <tr><td>Logging, tracing, on-call</td><td>LangSmith traces, token and cost dashboards</td><td>"Every LLM request is traced with tokens, latency and the retrieved context."</td></tr>
+              <tr><td>Auth, rate limits, security</td><td>Per-user data access in RAG, prompt-injection defence</td><td>"Retrieval respects the same permissions as the rest of the system."</td></tr>
+              <tr><td>Retries, circuit breakers</td><td><code>with_retry</code>, <code>with_fallbacks</code>, model routing</td><td>"If one provider fails or slows, traffic falls back to another."</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Roadmap -->
+      <section class="section" id="roadmap">
+        <div class="section-head">
+          <span class="eyebrow">From knowing to proving</span>
+          <h2>90-day plan</h2>
+          <p>You don't need more courses. This plan turns what you already know into evidence an interviewer can check, then into offers.</p>
+        </div>
+        <ol class="phases">
+          <li>
+            <span class="k">Days 1–30</span>
+            <h3>Choose a target, build the proof</h3>
+            <p>Choose a primary role (Staff AI Engineer or AI Architect) and a backup (Senior FDE or AI Infra). Audit your past work for numbers.</p>
+            <p class="ship"><b>Ship</b> One flagship case study: problem, architecture diagram, key decisions, and before-and-after metrics (accuracy, p95 latency, cost per request). Use a real project, anonymized, or a polished public one.</p>
+          </li>
+          <li>
+            <span class="k">Days 31–60</span>
+            <h3>Show depth and leadership</h3>
+            <p>Write 2 design docs or architecture decision records, e.g. "hosted API vs self-hosted vLLM" and "how we evaluate RAG quality". Prepare 6 leadership stories in STAR format.</p>
+            <p class="ship"><b>Ship</b> A public technical write-up or talk on one hard problem you solved, such as an eval-driven accuracy jump or cutting serving cost. It's the strongest signal for Staff and Architect.</p>
+          </li>
+          <li>
+            <span class="k">Days 61–90</span>
+            <h3>Interview loop</h3>
+            <p>Do 2 timed system-design sessions a week using the prompts below. Rewrite your resume headline around AI systems, not backend. Apply in focused batches.</p>
+            <p class="ship"><b>Ship</b> Applications to 15–20 targeted roles, plus referrals. Use <a href="../langchain/interview.html">Interview prep</a> for the fundamentals round.</p>
+          </li>
+        </ol>
+        <div class="section-head">
+          <h3>System design prompts to practise</h3>
+          <p>These come up again and again at senior and staff level. For each one, cover the requirements, the architecture, how you'd evaluate it, cost, failure modes and security.</p>
+        </div>
+        <ol class="questions">
+          <li><span class="k">1</span><div><b>Support assistant over 1M documents</b><span>With per-user permissions, citations, and freshness when documents change.</span></div></li>
+          <li><span class="k">2</span><div><b>Multi-tenant LLM gateway</b><span>Routing, rate limits, fallbacks, usage metering and cost caps per team.</span></div></li>
+          <li><span class="k">3</span><div><b>Agent that takes real actions</b><span>E.g. refunds or bookings: tool design, human approval, audit trail, rollback.</span></div></li>
+          <li><span class="k">4</span><div><b>Evaluation platform for 20 teams</b><span>Datasets, LLM-as-judge, regression gates in CI, dashboards.</span></div></li>
+          <li><span class="k">5</span><div><b>Self-hosted model serving</b><span>A cost target per 1M tokens, autoscaling on GPUs, and when to fall back to an API.</span></div></li>
+          <li><span class="k">6</span><div><b>Document ingestion at scale</b><span>PDFs and scans, OCR, chunking, re-indexing, deletes, PII redaction.</span></div></li>
+        </ol>
+      </section>
+
+      <footer>Role definitions and levels vary between companies. Use this page as a map and check details against the job descriptions you're targeting.</footer>
+    </main>
+  </div>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>
