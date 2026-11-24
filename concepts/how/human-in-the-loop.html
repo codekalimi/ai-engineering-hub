@@ -26,6 +26,7 @@
         <span class="eyebrow">Tools &amp; agents · 6 of 7</span>
         <h1>How does human-in-the-loop approval work (interrupt and resume)?</h1>
         <p class="tldr"><span class="label">In one line</span>The graph pauses at a node, saves its state, and returns the pending action to your app. When a person decides, the app resumes the same thread with their answer.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-hitl">
@@ -73,6 +74,66 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A tiny version of LangGraph's interrupt() and Command(resume=...).</span>
+import json
+
+checkpoints = {}                                   <span class="c"># the checkpointer: thread_id -> saved state</span>
+
+class Interrupt(Exception):
+    def __init__(self, payload):
+        self.payload = payload
+
+def draft_node(state, resume):
+    return {&quot;draft&quot;: f&quot;Hi {state['to']}, the invoice is attached.&quot;}
+
+def approve_node(state, resume):
+    <span class="c"># <b>Step 2</b>: interrupt() pauses with the thing that needs approval</span>
+    if resume is None:
+        raise Interrupt({&quot;action&quot;: &quot;send_email&quot;, &quot;draft&quot;: state[&quot;draft&quot;]})
+    <span class="c"># <b>Step 6</b>: on resume, the node runs again from its start and interrupt() returns the decision</span>
+    return {&quot;approved&quot;: resume[&quot;approved&quot;], &quot;draft&quot;: resume.get(&quot;edited&quot;, state[&quot;draft&quot;])}
+
+def send_node(state, resume):
+    return {&quot;sent&quot;: state[&quot;approved&quot;]}
+
+NODES = [(&quot;draft&quot;, draft_node), (&quot;approve&quot;, approve_node), (&quot;send&quot;, send_node)]
+
+def invoke(inp, thread_id, resume=None):
+    saved = checkpoints.get(thread_id)
+    state, start = (saved[&quot;state&quot;], saved[&quot;next&quot;]) if saved else (dict(inp), 0)
+    for i in range(start, len(NODES)):
+        name, fn = NODES[i]
+        try:
+            update = fn(state, resume)
+        except Interrupt as it:
+            <span class="c"># <b>Step 3</b>: save the state and the node to re-run, then return the payload</span>
+            checkpoints[thread_id] = {&quot;state&quot;: state, &quot;next&quot;: i}
+            print(f&quot;  paused at '{name}', state saved for {thread_id}&quot;)
+            return {&quot;__interrupt__&quot;: it.payload}
+        state.update(update)
+        print(f&quot;  ran {name}: {update}&quot;)
+    checkpoints[thread_id] = {&quot;state&quot;: state, &quot;next&quot;: len(NODES)}
+    return state
+
+<span class="c"># <b>Step 1</b>: invoke with a thread_id</span>
+print(&quot;app got:&quot;, json.dumps(invoke({&quot;to&quot;: &quot;Ravi&quot;}, &quot;thread-9&quot;)))
+<span class="c"># <b>Step 4</b>: a person reviews and edits it in your UI - maybe hours later</span>
+decision = {&quot;approved&quot;: True, &quot;edited&quot;: &quot;Hi Ravi, invoice #881 is attached. Thanks!&quot;}
+<span class="c"># <b>Step 5</b>: invoke again with the decision and the SAME thread_id</span>
+print(&quot;final state:&quot;, json.dumps(invoke(None, &quot;thread-9&quot;, resume=decision)))
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">  ran draft: {'draft': 'Hi Ravi, the invoice is attached.'}
+  paused at 'approve', state saved for thread-9
+app got: {&quot;__interrupt__&quot;: {&quot;action&quot;: &quot;send_email&quot;, &quot;draft&quot;: &quot;Hi Ravi, the invoice is attached.&quot;}}
+  ran approve: {'approved': True, 'draft': 'Hi Ravi, invoice #881 is attached. Thanks!'}
+  ran send: {'sent': True}
+final state: {&quot;to&quot;: &quot;Ravi&quot;, &quot;draft&quot;: &quot;Hi Ravi, invoice #881 is attached. Thanks!&quot;, &quot;approved&quot;: true, &quot;sent&quot;: true}</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>LangGraph: after the call that pauses, <code>state = graph.get_state(config)</code>; <code>state.next</code> shows the node that will run on resume and <code>state.tasks[0].interrupts</code> holds the payload.</li><li>The returned value also carries the pause: look for the <code>__interrupt__</code> key in what <code>invoke</code> returns.</li><li>Use a persistent checkpointer (SQLite or Postgres), stop your Python process after the interrupt, start it again and resume with <code>Command(resume=...)</code>: it still works, which proves nothing was held in memory.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="agent-memory.html">

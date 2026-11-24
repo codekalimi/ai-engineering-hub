@@ -26,6 +26,7 @@
         <span class="eyebrow">Inside the LLM · 6 of 8</span>
         <h1>How are LLMs trained, from pretraining to assistant?</h1>
         <p class="tldr"><span class="label">In one line</span>First the model learns language by predicting the next token on huge amounts of text; then it learns to follow instructions from examples; then it's tuned towards the answers people prefer.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-training-overview">
@@ -56,6 +57,57 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># One tiny model, trained twice: pretraining on raw text, then SFT on an instruction example.</span>
+<span class="c"># The model is a table of scores: next token = softmax(W[previous token]).</span>
+import math
+
+def train(W, pairs, epochs, label, lr=0.5):
+    for epoch in range(epochs):
+        loss = 0.0
+        for prev, nxt in pairs:
+            row = W.setdefault(prev, {t: 0.0 for t in VOCAB})
+            exps = {t: math.exp(s) for t, s in row.items()}
+            z = sum(exps.values())
+            loss += -math.log(exps[nxt] / z)              <span class="c"># cross-entropy: surprise at the right token</span>
+            for t in VOCAB:                               <span class="c"># gradient step on the scores</span>
+                row[t] -= lr * (exps[t] / z - (1.0 if t == nxt else 0.0))
+        if epoch in (0, epochs - 1):
+            print(f&quot;{label} epoch {epoch + 1:2}: loss {loss / len(pairs):.3f}&quot;)
+
+def pairs_of(text):
+    toks = text.split()
+    return list(zip(toks, toks[1:]))
+
+def predict(W, prev):
+    row = W.get(prev, {})
+    return max(row, key=row.get) if row else None
+
+web = (&quot;paris is the capital of france . the capital of france is paris . &quot;
+       &quot;what is the capital of spain ? what is the capital of italy ?&quot;)
+sft = &quot;what is the capital of france ? answer : paris .&quot;
+VOCAB = sorted(set(web.split()) | set(sft.split()))
+W = {}
+<span class="c"># <b>Step 1</b>: pretraining - learn to continue text</span>
+train(W, pairs_of(web), 30, &quot;pretrain&quot;)
+<span class="c"># <b>Step 2</b>: a base model continues text; after &quot;?&quot; it expects another question</span>
+print(&quot;base model: after '?' comes&quot;, repr(predict(W, &quot;?&quot;)))
+<span class="c"># <b>Step 3</b>: SFT on instruction -> answer examples</span>
+train(W, pairs_of(sft) * 5, 30, &quot;sft     &quot;)
+print(&quot;after SFT:  after '?' comes&quot;, repr(predict(W, &quot;?&quot;)))
+<span class="c"># <b>Steps 4-5 (preference tuning, RL)</b> - see the RLHF/DPO page</span>
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">pretrain epoch  1: loss 2.319
+pretrain epoch 30: loss 0.510
+base model: after '?' comes 'what'
+sft      epoch  1: loss 1.189
+sft      epoch 30: loss 0.011
+after SFT:  after '?' comes 'answer'</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Compare a base model and its instruct version on Hugging Face (e.g. a <code>-Base</code> and an <code>-Instruct</code> model of the same family) with the same prompt: the base one just continues the text.</li><li>Print <code>tokenizer.apply_chat_template(messages, tokenize=False)</code> to see the exact text an instruct model was fine-tuned on.</li><li>Read the training logs of an open run (loss going down over steps): pretraining and SFT both minimize the same next-token loss.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="sampling.html">

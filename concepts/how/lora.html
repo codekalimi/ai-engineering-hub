@@ -26,6 +26,7 @@
         <span class="eyebrow">Training &amp; fine-tuning · 2 of 5</span>
         <h1>How does LoRA fine-tuning work?</h1>
         <p class="tldr"><span class="label">In one line</span>The original weights are frozen; two small trainable matrices are added beside them, and only those are trained. Their product is a low-rank update to the original weights.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-lora">
@@ -64,6 +65,45 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import random
+random.seed(0)
+
+d, r = 8, 2                                      <span class="c"># an 8x8 layer, LoRA rank 2</span>
+W = [[random.uniform(-1, 1) for _ in range(d)] for _ in range(d)]   <span class="c"># <b>Step 1</b>: frozen pretrained weights</span>
+A = [[random.gauss(0, 0.1) for _ in range(d)] for _ in range(r)]    <span class="c"># <b>Step 2</b>: A shrinks d -> r</span>
+B = [[0.0] * r for _ in range(d)]                                   <span class="c">#         B expands r -> d, starts at 0</span>
+matvec = lambda M, v: [sum(a * b for a, b in zip(row, v)) for row in M]
+
+def forward(x):
+    <span class="c"># <b>Step 3</b>: output = W x + B (A x)</span>
+    return [w + l for w, l in zip(matvec(W, x), matvec(B, matvec(A, x)))]
+
+x = [1.0] * d
+print(&quot;before training the adapter changes nothing (B = 0):&quot;, forward(x) == matvec(W, x))
+
+<span class="c"># <b>Step 4</b>: only A and B are trained</span>
+full, lora = d * d, d * r + r * d
+print(f&quot;this layer: full fine-tune {full} weights, LoRA {lora} ({lora / full:.0%})&quot;)
+D = 4096
+print(f&quot;a 4096x4096 layer: full {D * D:,} weights, LoRA r=16 {2 * D * 16:,} ({2 * D * 16 / (D * D):.2%})&quot;)
+
+<span class="c"># pretend training changed B; <b>Step 5</b>: merge B·A into W so inference costs nothing extra</span>
+B = [[0.1 * (i - j) for j in range(r)] for i in range(d)]
+BA = [[sum(B[i][k] * A[k][j] for k in range(r)) for j in range(d)] for i in range(d)]
+W_merged = [[W[i][j] + BA[i][j] for j in range(d)] for i in range(d)]
+same = all(abs(a - b) &lt; 1e-9 for a, b in zip(forward(x), matvec(W_merged, x)))
+print(&quot;merged W gives the same output as W + adapter:&quot;, same)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">before training the adapter changes nothing (B = 0): True
+this layer: full fine-tune 64 weights, LoRA 32 (50%)
+a 4096x4096 layer: full 16,777,216 weights, LoRA r=16 131,072 (0.78%)
+merged W gives the same output as W + adapter: True</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>PEFT: <code>model = get_peft_model(model, LoraConfig(r=16, lora_alpha=32, target_modules=[&quot;q_proj&quot;, &quot;v_proj&quot;]))</code>, then <code>model.print_trainable_parameters()</code> prints how few weights are trained.</li><li>Print one wrapped layer (e.g. a <code>q_proj</code>) to see the base weight plus the <code>lora_A</code> and <code>lora_B</code> modules attached to it.</li><li>After training, <code>model.merge_and_unload()</code> folds B·A into W; compare outputs before and after merging, as the program below does.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="sft.html">

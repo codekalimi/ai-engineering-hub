@@ -26,6 +26,7 @@
         <span class="eyebrow">Quality, safety &amp; operations · 1 of 6</span>
         <h1>How does an LLM evaluation pipeline work?</h1>
         <p class="tldr"><span class="label">In one line</span>A fixed dataset is run through the new version of the app, each output is scored by code checks and an LLM judge, and the scores are compared with the current version before deploying.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-eval-pipeline">
@@ -56,6 +57,43 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># <b>Step 1</b>: a dataset of real cases, each with a check</span>
+dataset = [
+    {&quot;q&quot;: &quot;What is 15% of 200?&quot;, &quot;check&quot;: lambda a: &quot;30&quot; in a},
+    {&quot;q&quot;: &quot;Return JSON with key ok&quot;, &quot;check&quot;: lambda a: a.strip().startswith(&quot;{&quot;) and '&quot;ok&quot;' in a},
+    {&quot;q&quot;: &quot;Refund window?&quot;, &quot;check&quot;: lambda a: &quot;30 days&quot; in a},
+    {&quot;q&quot;: &quot;Say hello in French&quot;, &quot;check&quot;: lambda a: &quot;bonjour&quot; in a.lower()},
+]
+def app_v1(q):   <span class="c"># the current version</span>
+    return {&quot;What is 15% of 200?&quot;: &quot;30&quot;, &quot;Return JSON with key ok&quot;: '{&quot;ok&quot;: true}',
+            &quot;Refund window?&quot;: &quot;30 days&quot;, &quot;Say hello in French&quot;: &quot;Hello&quot;}[q]
+def app_v2(q):   <span class="c"># the candidate: a new prompt that fixes French but breaks JSON</span>
+    return {&quot;What is 15% of 200?&quot;: &quot;The answer is 30.&quot;, &quot;Return JSON with key ok&quot;: 'Sure! {&quot;ok&quot;: true}',
+            &quot;Refund window?&quot;: &quot;You have 30 days.&quot;, &quot;Say hello in French&quot;: &quot;Bonjour&quot;}[q]
+
+<span class="c"># <b>Step 2-3</b>: run every case through both versions and score them</span>
+results = [(c[&quot;q&quot;], c[&quot;check&quot;](app_v1(c[&quot;q&quot;])), c[&quot;check&quot;](app_v2(c[&quot;q&quot;]))) for c in dataset]
+<span class="c"># <b>Step 4</b>: compare case by case, not just the average</span>
+for q, old, new in results:
+    note = &quot;REGRESSION&quot; if old and not new else (&quot;fixed&quot; if new and not old else &quot;&quot;)
+    print(f&quot;{q:26} v1={'pass' if old else 'FAIL'}  v2={'pass' if new else 'FAIL'}  {note}&quot;)
+print(f&quot;pass rate: v1 {sum(r[1] for r in results)}/4, v2 {sum(r[2] for r in results)}/4&quot;)
+<span class="c"># <b>Step 5</b>: same average, but v2 broke a case that used to pass</span>
+if any(old and not new for _, old, new in results):
+    print(&quot;release blocked: fix the regression first&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">What is 15% of 200?        v1=pass  v2=pass  
+Return JSON with key ok    v1=pass  v2=FAIL  REGRESSION
+Refund window?             v1=pass  v2=pass  
+Say hello in French        v1=FAIL  v2=pass  fixed
+pass rate: v1 3/4, v2 3/4
+release blocked: fix the regression first</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>promptfoo: <code>npx promptfoo@latest init</code>, list test cases and assertions in its YAML, <code>npx promptfoo eval</code>, then <code>npx promptfoo view</code> for a side-by-side comparison.</li><li>LangSmith: create a dataset from real traces and run <code>evaluate(...)</code> with your evaluators; compare two experiments case by case.</li><li>Run it in CI on every prompt or model change, and fail the build on regressions of cases that used to pass.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="distributed-training.html">

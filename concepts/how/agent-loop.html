@@ -26,6 +26,7 @@
         <span class="eyebrow">Tools &amp; agents · 2 of 7</span>
         <h1>How does an agent loop work?</h1>
         <p class="tldr"><span class="label">In one line</span>An agent is a loop: the model decides whether to call a tool; if it does, the tool runs and the result goes back to the model; when it stops calling tools, its reply is the answer.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-agentloop">
@@ -60,6 +61,58 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import json
+
+def search_flights(src, dst):
+    return [{&quot;flight&quot;: &quot;AI-101&quot;, &quot;price&quot;: 5400}, {&quot;flight&quot;: &quot;6E-22&quot;, &quot;price&quot;: 4100}]
+def book(flight):
+    return f&quot;booked {flight}, ref XK42&quot;
+TOOLS = {&quot;search_flights&quot;: search_flights, &quot;book&quot;: book}
+
+def llm(messages):
+    <span class="c"># a scripted stand-in for the model: it reads the conversation and decides the next move</span>
+    results = [m for m in messages if m[&quot;role&quot;] == &quot;tool&quot;]
+    if not results:
+        return {&quot;tool_calls&quot;: [{&quot;id&quot;: &quot;c1&quot;, &quot;name&quot;: &quot;search_flights&quot;, &quot;args&quot;: {&quot;src&quot;: &quot;PNQ&quot;, &quot;dst&quot;: &quot;DEL&quot;}}]}
+    if len(results) == 1:
+        cheapest = min(json.loads(results[0][&quot;content&quot;]), key=lambda f: f[&quot;price&quot;])
+        return {&quot;tool_calls&quot;: [{&quot;id&quot;: &quot;c2&quot;, &quot;name&quot;: &quot;book&quot;, &quot;args&quot;: {&quot;flight&quot;: cheapest[&quot;flight&quot;]}}]}
+    return {&quot;content&quot;: &quot;Booked the cheapest flight, 6E-22 (ref XK42).&quot;}
+
+<span class="c"># <b>Step 1</b>: start with the task (plus, in real life, a system prompt and the tool schemas)</span>
+messages = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Book me the cheapest flight from Pune to Delhi&quot;}]
+MAX_STEPS = 5                                    <span class="c"># always cap the loop</span>
+for step in range(1, MAX_STEPS + 1):
+    <span class="c"># <b>Step 2</b>: each turn the model either requests tools or answers</span>
+    reply = llm(messages)
+    messages.append({&quot;role&quot;: &quot;assistant&quot;, **reply})
+    if &quot;tool_calls&quot; not in reply:
+        <span class="c"># <b>Step 5</b>: no tool call -> this reply is the final answer</span>
+        print(f&quot;step {step}: FINAL -> {reply['content']}&quot;)
+        break
+    for call in reply[&quot;tool_calls&quot;]:
+        <span class="c"># <b>Step 3</b>: run the tool and append its result (errors go back as text, not exceptions)</span>
+        try:
+            result = TOOLS[call[&quot;name&quot;]](**call[&quot;args&quot;])
+        except Exception as err:
+            result = f&quot;error: {err}&quot;
+        messages.append({&quot;role&quot;: &quot;tool&quot;, &quot;tool_call_id&quot;: call[&quot;id&quot;], &quot;content&quot;: json.dumps(result)})
+        print(f&quot;step {step}: {call['name']}({call['args']}) -> {result}&quot;)
+    <span class="c"># <b>Step 4</b>: loop - the model is called again with the longer conversation</span>
+else:
+    print(&quot;stopped: step limit reached&quot;)
+print(f&quot;{len(messages)} messages in the conversation after {step} LLM calls&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">step 1: search_flights({'src': 'PNQ', 'dst': 'DEL'}) -> [{'flight': 'AI-101', 'price': 5400}, {'flight': '6E-22', 'price': 4100}]
+step 2: book({'flight': '6E-22'}) -> booked 6E-22, ref XK42
+step 3: FINAL -> Booked the cheapest flight, 6E-22 (ref XK42).
+6 messages in the conversation after 3 LLM calls</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>LangChain/LangGraph agents: <code>result = agent.invoke({&quot;messages&quot;: [(&quot;user&quot;, &quot;...&quot;)]})</code>, then <code>for m in result[&quot;messages&quot;]: m.pretty_print()</code> shows every turn: AI tool calls, tool results, final answer.</li><li>Watch it live: <code>for step in agent.stream(inputs, stream_mode=&quot;updates&quot;): print(step)</code> prints one update per loop iteration.</li><li>LangSmith (set <code>LANGSMITH_TRACING=true</code>) shows each loop turn as a child run with the exact prompt, tool arguments, timings and tokens.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="tool-calling.html">

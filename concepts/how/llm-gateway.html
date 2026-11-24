@@ -26,6 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 8 of 10</span>
         <h1>How does an LLM gateway handle a request?</h1>
         <p class="tldr"><span class="label">In one line</span>Every app calls one internal API; the gateway authenticates the team, enforces limits, checks the cache, routes to the right model, falls back on errors and records usage.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-gateway">
@@ -56,6 +57,54 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import random
+random.seed(1)
+
+ALIASES = {&quot;smart&quot;: [(&quot;provider-a&quot;, &quot;big-model&quot;), (&quot;provider-b&quot;, &quot;big-model-2&quot;)]}   <span class="c"># primary, fallback</span>
+BUDGET, SPENT = {&quot;team-search&quot;: 1.00}, {&quot;team-search&quot;: 0.0}
+CACHE, LOG = {}, []
+
+def call_provider(provider, model, prompt):
+    if provider == &quot;provider-a&quot; and random.random() &lt; 0.7:
+        raise TimeoutError(f&quot;{provider} timed out&quot;)
+    return f&quot;[{model}] answer to {prompt!r}&quot;, 120             <span class="c"># text, tokens</span>
+
+def gateway(team, alias, prompt):
+    <span class="c"># <b>Step 1</b>: the app asked for an alias, not a provider. <b>Step 2</b>: auth, rate limit, budget</span>
+    if SPENT[team] >= BUDGET[team]:
+        return &quot;429 budget exceeded&quot;
+    <span class="c"># <b>Step 3</b>: cached response for an identical request</span>
+    if (alias, prompt) in CACHE:
+        LOG.append((team, &quot;cache&quot;, 0))
+        return CACHE[alias, prompt] + &quot; (from cache)&quot;
+    <span class="c"># <b>Step 4-5</b>: map the alias to provider/model; on errors fall back to the next one</span>
+    for provider, model in ALIASES[alias]:
+        try:
+            text, tokens = call_provider(provider, model, prompt)
+        except TimeoutError as err:
+            print(f&quot;   {err}, falling back&quot;)
+            continue
+        SPENT[team] += tokens * 2 / 1e6
+        LOG.append((team, provider, tokens))                   <span class="c"># <b>Step 6</b>: record usage per team</span>
+        CACHE[alias, prompt] = text
+        return text
+    return &quot;503 all providers failed&quot;
+
+for prompt in [&quot;summarize ticket 1&quot;, &quot;summarize ticket 1&quot;, &quot;summarize ticket 2&quot;]:
+    print(gateway(&quot;team-search&quot;, &quot;smart&quot;, prompt))
+print(&quot;usage log:&quot;, LOG)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">   provider-a timed out, falling back
+[big-model-2] answer to 'summarize ticket 1'
+[big-model-2] answer to 'summarize ticket 1' (from cache)
+[big-model] answer to 'summarize ticket 2'
+usage log: [('team-search', 'provider-b', 120), ('team-search', 'cache', 0), ('team-search', 'provider-a', 120)]</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>LiteLLM proxy: define model aliases with fallbacks in its config, call it with the OpenAI SDK, and read its logs/spend tracking for every request.</li><li>Force a failure (wrong API key on the primary provider) and confirm the request still succeeds through the fallback, with the fallback recorded in the logs.</li><li>Check response headers and logs for the provider actually used, tokens and cost: that per-team record is what finance asks for.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="prompt-caching.html">

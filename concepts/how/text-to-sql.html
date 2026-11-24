@@ -26,6 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 9 of 9</span>
         <h1>How does text-to-SQL work?</h1>
         <p class="tldr"><span class="label">In one line</span>The model gets the database schema and the question, writes a SQL query, your code runs it safely, and the model turns the result rows into an answer.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-text-to-sql">
@@ -56,6 +57,63 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Uses SQLite from the standard library.</span>
+import re, sqlite3
+
+db = sqlite3.connect(&quot;:memory:&quot;)
+db.executescript(&quot;&quot;&quot;
+CREATE TABLE orders (id INTEGER, customer TEXT, amount REAL, created TEXT);
+INSERT INTO orders VALUES (1,'acme',120,'2026-10-02'), (2,'globex',80,'2026-10-15'),
+                          (3,'acme',200,'2026-11-01'), (4,'initech',50,'2026-11-03');
+&quot;&quot;&quot;)
+ALLOWED_TABLES = {&quot;orders&quot;}
+
+<span class="c"># <b>Step 1</b>: the prompt carries the schema (real systems add column meanings and example queries)</span>
+schema = db.execute(&quot;SELECT sql FROM sqlite_master WHERE name='orders'&quot;).fetchone()[0]
+question = &quot;Which customer spent the most in total?&quot;
+prompt = f&quot;Schema:\n{schema}\n\nWrite one SQLite query for: {question}&quot;
+
+<span class="c"># <b>Step 2</b>: the model writes SQL (stubbed: the first attempt has a mistake, the second is fixed)</span>
+attempts = iter([
+    &quot;SELECT customer, SUM(amount) AS total FROM order GROUP BY customer ORDER BY total DESC&quot;,
+    &quot;SELECT customer, SUM(amount) AS total FROM orders GROUP BY customer ORDER BY total DESC&quot;,
+])
+
+def validate(sql):
+    <span class="c"># <b>Step 3</b>: one read-only SELECT, allowed tables only, always a row limit</span>
+    if not re.match(r&quot;(?is)^\s*select\b&quot;, sql) or &quot;;&quot; in sql.rstrip(&quot;;&quot;):
+        raise ValueError(&quot;only a single SELECT is allowed&quot;)
+    for table in re.findall(r&quot;(?i)\b(?:from|join)\s+(\w+)&quot;, sql):
+        if table.lower() not in ALLOWED_TABLES:
+            raise ValueError(f&quot;table '{table}' is not allowed (allowed: {sorted(ALLOWED_TABLES)})&quot;)
+    return sql + &quot; LIMIT 100&quot;
+
+sql = next(attempts)
+for attempt in (1, 2):
+    try:
+        safe = validate(sql)
+        rows = db.execute(safe).fetchall()   <span class="c"># <b>Step 4</b>: in production, a read-only user on a replica</span>
+        print(f&quot;attempt {attempt} ran: {safe}&quot;)
+        break
+    except Exception as err:
+        <span class="c"># <b>Step 5</b>: the error goes back to the model so it can fix the query</span>
+        print(f&quot;attempt {attempt} rejected: {err} -> error sent back to the model&quot;)
+        sql = next(attempts)
+
+<span class="c"># <b>Step 6</b>: summarize, and show the SQL so users can check it</span>
+print(&quot;rows:&quot;, rows)
+print(f&quot;answer: {rows[0][0]} spent the most ({rows[0][1]:.0f}).&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">attempt 1 rejected: table 'order' is not allowed (allowed: ['orders']) -> error sent back to the model
+attempt 2 ran: SELECT customer, SUM(amount) AS total FROM orders GROUP BY customer ORDER BY total DESC LIMIT 100
+rows: [('acme', 320.0), ('globex', 80.0), ('initech', 50.0)]
+answer: acme spent the most (320).</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Log the generated SQL for every question, next to the answer; show it to users too, so they can check it.</li><li>Run <code>EXPLAIN</code> on generated queries in development to catch slow full-table scans before they reach production.</li><li>Connect with a read-only database role and a statement timeout, then try a prompt that asks it to delete something, and confirm the database refuses.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="parent-document-retrieval.html">

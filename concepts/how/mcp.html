@@ -26,6 +26,7 @@
         <span class="eyebrow">Tools &amp; agents · 3 of 7</span>
         <h1>How does MCP (Model Context Protocol) work?</h1>
         <p class="tldr"><span class="label">In one line</span>MCP standardizes how AI apps discover and call tools and data: an MCP server describes its tools, and any MCP client can list and call them.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-mcp">
@@ -73,6 +74,57 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># MCP = JSON-RPC 2.0 messages between a client (inside the host app) and a server (a separate</span>
+<span class="c"># program, over stdio or HTTP). Here the server is a function so you can read every message.</span>
+import json
+
+TOOLS = [{&quot;name&quot;: &quot;get_ticket&quot;, &quot;description&quot;: &quot;Look up a support ticket by id&quot;,
+          &quot;inputSchema&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: {&quot;id&quot;: {&quot;type&quot;: &quot;string&quot;}}, &quot;required&quot;: [&quot;id&quot;]}}]
+TICKETS = {&quot;T-7&quot;: &quot;Printer on floor 3 is offline (open)&quot;}
+
+def server(raw):
+    msg = json.loads(raw)
+    if msg[&quot;method&quot;] == &quot;initialize&quot;:
+        result = {&quot;protocolVersion&quot;: &quot;2025-06-18&quot;, &quot;capabilities&quot;: {&quot;tools&quot;: {}}, &quot;serverInfo&quot;: {&quot;name&quot;: &quot;helpdesk&quot;}}
+    elif msg[&quot;method&quot;] == &quot;tools/list&quot;:
+        result = {&quot;tools&quot;: TOOLS}
+    elif msg[&quot;method&quot;] == &quot;tools/call&quot;:
+        <span class="c"># <b>Step 5</b>: the server does the real work (API, database, files)</span>
+        ticket = TICKETS.get(msg[&quot;params&quot;][&quot;arguments&quot;][&quot;id&quot;], &quot;not found&quot;)
+        result = {&quot;content&quot;: [{&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: ticket}]}
+    return json.dumps({&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;id&quot;: msg[&quot;id&quot;], &quot;result&quot;: result})
+
+next_id = 0
+def send(method, params=None):
+    global next_id
+    next_id += 1
+    raw = json.dumps({&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;id&quot;: next_id, &quot;method&quot;: method, &quot;params&quot;: params or {}})
+    print(&quot;client ->&quot;, raw[:105])
+    result = json.loads(server(raw))[&quot;result&quot;]
+    print(&quot;server &lt;-&quot;, json.dumps(result)[:105])
+    return result
+
+<span class="c"># <b>Step 1-2</b>: the host's client connects, exchanges capabilities, lists the tools</span>
+send(&quot;initialize&quot;, {&quot;protocolVersion&quot;: &quot;2025-06-18&quot;, &quot;capabilities&quot;: {}, &quot;clientInfo&quot;: {&quot;name&quot;: &quot;my-agent&quot;}})
+tools = send(&quot;tools/list&quot;)[&quot;tools&quot;]
+<span class="c"># <b>Step 3</b>: these schemas go to the LLM like any other tools; say it picks get_ticket</span>
+<span class="c"># <b>Step 4</b>: the client sends tools/call</span>
+result = send(&quot;tools/call&quot;, {&quot;name&quot;: &quot;get_ticket&quot;, &quot;arguments&quot;: {&quot;id&quot;: &quot;T-7&quot;}})
+print(&quot;text handed back to the LLM:&quot;, result[&quot;content&quot;][0][&quot;text&quot;])
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">client -> {&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;id&quot;: 1, &quot;method&quot;: &quot;initialize&quot;, &quot;params&quot;: {&quot;protocolVersion&quot;: &quot;2025-06-18&quot;, &quot;capabili
+server &lt;- {&quot;protocolVersion&quot;: &quot;2025-06-18&quot;, &quot;capabilities&quot;: {&quot;tools&quot;: {}}, &quot;serverInfo&quot;: {&quot;name&quot;: &quot;helpdesk&quot;}}
+client -> {&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;id&quot;: 2, &quot;method&quot;: &quot;tools/list&quot;, &quot;params&quot;: {}}
+server &lt;- {&quot;tools&quot;: [{&quot;name&quot;: &quot;get_ticket&quot;, &quot;description&quot;: &quot;Look up a support ticket by id&quot;, &quot;inputSchema&quot;: {&quot;type&quot;
+client -> {&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;id&quot;: 3, &quot;method&quot;: &quot;tools/call&quot;, &quot;params&quot;: {&quot;name&quot;: &quot;get_ticket&quot;, &quot;arguments&quot;: {&quot;id&quot;: 
+server &lt;- {&quot;content&quot;: [{&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;Printer on floor 3 is offline (open)&quot;}]}
+text handed back to the LLM: Printer on floor 3 is offline (open)</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>MCP Inspector: <code>npx @modelcontextprotocol/inspector &lt;command that starts your server></code> opens a UI where you can call initialize, tools/list and tools/call yourself and read the raw JSON-RPC messages.</li><li>A stdio server is just a process reading JSON lines on stdin and writing them on stdout; log them to stderr to watch the conversation.</li><li>In your host app’s logs (Claude Desktop, IDE assistants and others write MCP logs), look for the tools/list response to see exactly which tool descriptions the model receives.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="agent-loop.html">

@@ -26,6 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 3 of 10</span>
         <h1>How does PagedAttention work?</h1>
         <p class="tldr"><span class="label">In one line</span>The KV cache is stored in small fixed-size blocks, like operating-system memory pages, allocated only as a sequence grows, so almost no memory is wasted.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-paged-attention">
@@ -60,6 +61,49 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># KV cache in fixed-size blocks that can sit anywhere in GPU memory, plus a block table per sequence.</span>
+BLOCK = 4                                        <span class="c"># tokens per block</span>
+free_blocks = list(range(10))                    <span class="c"># physical blocks on the GPU</span>
+tables, lengths, refcount = {}, {}, {}
+
+def append_token(seq):
+    <span class="c"># <b>Step 3-4</b>: a new block is allocated only when the sequence's last block is full</span>
+    if lengths.get(seq, 0) % BLOCK == 0:
+        block = free_blocks.pop(0)
+        tables.setdefault(seq, []).append(block)
+        refcount[block] = 1
+    lengths[seq] = lengths.get(seq, 0) + 1
+
+def fork(parent, child):
+    <span class="c"># <b>Step 5</b>: a request with the same prefix points at the SAME physical blocks</span>
+    <span class="c"># (copy-on-write: a shared block is copied only when one of them writes to it)</span>
+    tables[child], lengths[child] = list(tables[parent]), lengths[parent]
+    for block in tables[child]:
+        refcount[block] += 1
+
+for _ in range(6):
+    append_token(&quot;req1&quot;)                         <span class="c"># 6 tokens -> 2 blocks</span>
+for _ in range(3):
+    append_token(&quot;req2&quot;)                         <span class="c"># 3 tokens -> 1 block</span>
+fork(&quot;req1&quot;, &quot;req1-sample2&quot;)                     <span class="c"># e.g. a second sample of the same prompt</span>
+
+print(&quot;block tables (logical -> physical):&quot;, tables)
+print(&quot;blocks shared by more than one sequence:&quot;, [b for b, n in refcount.items() if n > 1])
+used = lengths[&quot;req1&quot;] + lengths[&quot;req2&quot;]
+print(f&quot;paged: {len(tables['req1']) + len(tables['req2'])} blocks = {(len(tables['req1']) + len(tables['req2'])) * BLOCK} slots for {used} tokens&quot;)
+<span class="c"># <b>Step 1-2</b>: the old way reserved the maximum length for every request up front</span>
+print(f&quot;old way: 2 requests x 2048 max tokens = 4096 slots reserved for {used} tokens&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">block tables (logical -> physical): {'req1': [0, 1], 'req2': [2], 'req1-sample2': [0, 1]}
+blocks shared by more than one sequence: [0, 1]
+paged: 3 blocks = 12 slots for 9 tokens
+old way: 2 requests x 2048 max tokens = 4096 slots reserved for 9 tokens</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>vLLM’s startup log reports the KV-cache size it allocated (as tokens/blocks); change <code>--gpu-memory-utilization</code> or <code>--max-model-len</code> and see it change.</li><li>Read <code>vllm/core/block_manager</code> (older versions) or the KV-cache manager in the v1 engine: block tables like the one below, mapping each sequence to physical blocks.</li><li>Turn prefix caching on (<code>--enable-prefix-caching</code>, the default in recent versions) and send many requests with the same long system prompt: KV-cache usage grows far less than the request count.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="continuous-batching.html">

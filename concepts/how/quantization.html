@@ -26,6 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 4 of 10</span>
         <h1>How does quantization work?</h1>
         <p class="tldr"><span class="label">In one line</span>Weights are stored as small integers plus a scale factor per group, cutting memory 2–4×, and are converted back (or computed directly) at run time.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-quantization">
@@ -64,6 +65,46 @@ def quantize_int8(w):
 def dequantize(q, scale):
     return q.astype(np.float32) * scale</pre>
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import random
+random.seed(4)
+
+weights = [random.gauss(0, 0.02) for _ in range(256)]
+weights[10] = 0.31                                   <span class="c"># one outlier, as real models have</span>
+
+def quantize(ws, group, bits):
+    qmax = 2 ** (bits - 1) - 1                       <span class="c"># 127 for int8, 7 for int4</span>
+    out = []
+    for g in range(0, len(ws), group):               <span class="c"># <b>Step 1</b>: work per group of weights</span>
+        chunk = ws[g:g + group]
+        scale = max(abs(w) for w in chunk) / qmax    <span class="c"># <b>Step 2</b>: a scale so the group fits the range</span>
+        q = [round(w / scale) for w in chunk]        <span class="c"># <b>Step 3</b>: divide and round to integers</span>
+        out.append((scale, q))                       <span class="c"># <b>Step 4</b>: store the integers + one scale per group</span>
+    return out
+
+def dequantize(groups):
+    return [qi * scale for scale, q in groups for qi in q]   <span class="c"># <b>Step 5</b>: multiply back at run time</span>
+
+for bits, group in [(8, 128), (4, 128), (4, 32)]:
+    restored = dequantize(quantize(weights, group, bits))
+    err = sum(abs(a - b) for a, b in zip(weights, restored)) / len(weights)
+    print(f&quot;int{bits}, groups of {group:3}: average error {err:.5f}&quot;)
+print(&quot;smaller groups contain the outlier's damage to fewer weights&quot;)
+for name, bytes_per_weight in [(&quot;FP16&quot;, 2), (&quot;INT8&quot;, 1), (&quot;INT4&quot;, 0.5)]:
+    print(f&quot;70B model in {name}: {70e9 * bytes_per_weight / 1e9:.0f} GB of weights&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">int8, groups of 128: average error 0.00036
+int4, groups of 128: average error 0.00601
+int4, groups of  32: average error 0.00255
+smaller groups contain the outlier's damage to fewer weights
+70B model in FP16: 140 GB of weights
+70B model in INT8: 70 GB of weights
+70B model in INT4: 35 GB of weights</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Hugging Face: load with <code>BitsAndBytesConfig(load_in_4bit=True)</code> and compare <code>model.get_memory_footprint()</code> with the 16-bit load.</li><li>Run the same eval set on the 16-bit and quantized versions; small accuracy drops are normal, big ones mean the method or bit-width is too aggressive for your task.</li><li>Read a quantized checkpoint’s config (<code>quantization_config</code> in config.json) to see the method, bits and group size.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="paged-attention.html">

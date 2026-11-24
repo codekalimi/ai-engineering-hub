@@ -26,6 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 4 of 9</span>
         <h1>How does hybrid search with reciprocal rank fusion (RRF) work?</h1>
         <p class="tldr"><span class="label">In one line</span>Keyword search and vector search run separately, and their two ranked lists are merged by rewarding documents that rank highly in either one.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-hybrid">
@@ -71,6 +72,65 @@
 
 rrf([&quot;d3&quot;, &quot;d1&quot;, &quot;d7&quot;], [&quot;d1&quot;, &quot;d9&quot;, &quot;d3&quot;])   # -> ['d1', 'd3', 'd9', 'd7']</pre>
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import math, re
+
+docs = {
+    &quot;d1&quot;: &quot;reset your password from the account settings page&quot;,
+    &quot;d2&quot;: &quot;error code E-4021 means the payment token expired&quot;,
+    &quot;d3&quot;: &quot;how to change login credentials and recover access&quot;,
+    &quot;d4&quot;: &quot;payment failed because the card was declined&quot;,
+}
+tok = lambda t: re.findall(r&quot;[a-z0-9-]+&quot;, t.lower())
+
+<span class="c"># <b>Step 1</b>: BM25 - matching terms; rare terms weigh more; long documents are normalized</span>
+def bm25(query, k1=1.5, b=0.75):
+    N = len(docs)
+    avg = sum(len(tok(t)) for t in docs.values()) / N
+    scores = {}
+    for doc_id, text in docs.items():
+        words, s = tok(text), 0.0
+        for term in tok(query):
+            df = sum(term in tok(t) for t in docs.values())
+            if df == 0:
+                continue
+            idf = math.log(1 + (N - df + 0.5) / (df + 0.5))
+            tf = words.count(term)
+            s += idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * len(words) / avg))
+        scores[doc_id] = s
+    return [d for d in sorted(scores, key=scores.get, reverse=True) if scores[d] > 0]
+
+<span class="c"># <b>Step 2</b>: vector search - pretend an embedding model returned this ranking</span>
+<span class="c"># (it understands &quot;sign in problems&quot; ~ password/credentials, but not the exact error code)</span>
+query = &quot;sign in problems after E-4021&quot;
+vector_ranking = [&quot;d3&quot;, &quot;d1&quot;, &quot;d4&quot;, &quot;d2&quot;]
+
+<span class="c"># <b>Step 3</b>: RRF ignores the scores and combines ranks: 1 / (k + rank)</span>
+def rrf(*rankings, k=60):
+    fused = {}
+    for ranking in rankings:
+        for rank, d in enumerate(ranking, start=1):
+            fused[d] = fused.get(d, 0) + 1 / (k + rank)
+    return sorted(fused.items(), key=lambda x: -x[1])
+
+keyword_ranking = bm25(query)
+print(&quot;BM25 ranking:  &quot;, keyword_ranking)
+print(&quot;vector ranking:&quot;, vector_ranking)
+<span class="c"># <b>Step 4</b>: documents found by both, or near the top of either, rise</span>
+for d, s in rrf(keyword_ranking, vector_ranking):
+    print(f&quot;  {d} {s:.4f}  {docs[d]}&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">BM25 ranking:   ['d2']
+vector ranking: ['d3', 'd1', 'd4', 'd2']
+  d2 0.0320  error code E-4021 means the payment token expired
+  d3 0.0164  how to change login credentials and recover access
+  d1 0.0161  reset your password from the account settings page
+  d4 0.0159  payment failed because the card was declined</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>LangChain: combine a <code>BM25Retriever</code> and a vector-store retriever in an <code>EnsembleRetriever(retrievers=[bm25, vector], weights=[0.5, 0.5])</code>, which fuses with RRF.</li><li>Elasticsearch/OpenSearch, Weaviate, Qdrant and pgvector setups all offer hybrid queries; log both ranked lists before fusion to see what each one contributes.</li><li>Test with an exact code or ID (like an error code): keyword search finds it, embeddings often don’t.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="rag.html">

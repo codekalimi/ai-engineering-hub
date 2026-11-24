@@ -26,6 +26,7 @@
         <span class="eyebrow">Quality, safety &amp; operations · 2 of 6</span>
         <h1>How does LLM-as-a-judge work?</h1>
         <p class="tldr"><span class="label">In one line</span>A strong model is given the question, the answer and a rubric (and sometimes a reference answer), and returns a structured verdict with a reason; it's checked against human labels before you trust it.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-llm-judge">
@@ -56,6 +57,49 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import json
+
+<span class="c"># <b>Step 1</b>: a narrow, checkable rubric</span>
+RUBRIC = &quot;Score 1 if EVERY claim in the answer is supported by the context, else 0. Reply as JSON {score, reason}.&quot;
+
+def judge_prompt(question, context, answer):
+    <span class="c"># <b>Step 2</b>: the judge gets the question, context and answer (plus graded examples in real life)</span>
+    return f&quot;{RUBRIC}\nQuestion: {question}\nContext: {context}\nAnswer: {answer}&quot;
+
+def fake_judge(prompt):
+    <span class="c"># stands in for the judge LLM; it checks whether the numbers in the answer appear in the context</span>
+    context = prompt.split(&quot;Context: &quot;)[1].split(&quot;\nAnswer: &quot;)[0]
+    answer = prompt.split(&quot;Answer: &quot;)[1]
+    unsupported = [w for w in answer.replace(&quot;.&quot;, &quot; &quot;).replace(&quot;,&quot;, &quot; &quot;).split() if w.isdigit() and w not in context]
+    <span class="c"># <b>Step 3</b>: structured output - a score plus a short reason</span>
+    return json.dumps({&quot;score&quot;: 0 if unsupported else 1,
+                       &quot;reason&quot;: f&quot;not in context: {unsupported}&quot; if unsupported else &quot;all claims supported&quot;})
+
+cases = [   <span class="c"># question, context, answer, human label</span>
+    (&quot;Refund window?&quot;, &quot;Refunds within 30 days.&quot;, &quot;You have 30 days.&quot;, 1),
+    (&quot;Refund window?&quot;, &quot;Refunds within 30 days.&quot;, &quot;You have 60 days.&quot;, 0),
+    (&quot;Warranty?&quot;, &quot;Warranty lasts 2 years.&quot;, &quot;2 years, and 5 years for batteries.&quot;, 0),
+    (&quot;Warranty?&quot;, &quot;Warranty lasts 2 years.&quot;, &quot;Two years.&quot;, 1),
+]
+agree = 0
+for q, ctx, ans, human in cases:
+    verdict = json.loads(fake_judge(judge_prompt(q, ctx, ans)))
+    agree += verdict[&quot;score&quot;] == human
+    print(f&quot;{ans!r:38} judge={verdict['score']} human={human}  {verdict['reason']}&quot;)
+<span class="c"># <b>Step 4</b>: check agreement with human labels before trusting the judge</span>
+print(f&quot;judge agrees with humans on {agree}/{len(cases)}&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">'You have 30 days.'                    judge=1 human=1  all claims supported
+'You have 60 days.'                    judge=0 human=0  not in context: ['60']
+'2 years, and 5 years for batteries.'  judge=0 human=0  not in context: ['5']
+'Two years.'                           judge=1 human=1  all claims supported
+judge agrees with humans on 4/4</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Print the judge’s full reasoning for 20 cases and grade those cases yourself; agreement below about 80% means the rubric needs work.</li><li>Swap the order of two answers in a pairwise comparison and re-run: if the verdict flips, the judge has position bias.</li><li>Ask for structured output (score plus reason) so judge results can be aggregated and audited.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="eval-pipeline.html">

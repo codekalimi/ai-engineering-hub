@@ -26,6 +26,7 @@
         <span class="eyebrow">Tools &amp; agents · 7 of 7</span>
         <h1>How does an agent act on behalf of a user safely (delegated OAuth)?</h1>
         <p class="tldr"><span class="label">In one line</span>The user grants the app limited, scoped access through OAuth, and the agent calls APIs with that user's token, so it can never see or do more than the user could.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-delegated-auth">
@@ -71,6 +72,52 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Delegated access, simplified: real tokens are JWTs signed with RSA/EC keys by an identity provider.</span>
+import base64, hashlib, hmac, json, time
+
+IDP_KEY = b&quot;identity-provider-secret&quot;              <span class="c"># shared by the identity provider and the API</span>
+
+def b64(data): return base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip(&quot;=&quot;)
+def unb64(s): return json.loads(base64.urlsafe_b64decode(s + &quot;=&quot; * (-len(s) % 4)))
+def sign(body): return hmac.new(IDP_KEY, body.encode(), hashlib.sha256).hexdigest()[:16]
+
+def issue_token(user, scopes, ttl=600):
+    <span class="c"># <b>Step 1-2</b>: the user signs in and approves scopes; the IdP issues a short-lived token</span>
+    body = b64({&quot;sub&quot;: user, &quot;scope&quot;: &quot; &quot;.join(scopes), &quot;aud&quot;: &quot;calendar-api&quot;, &quot;exp&quot;: int(time.time()) + ttl})
+    return body + &quot;.&quot; + sign(body)
+
+def calendar_api(token, action, owner):
+    <span class="c"># <b>Step 4</b>: the API checks signature, audience, expiry, scope AND the user's own permissions</span>
+    body, sig = token.split(&quot;.&quot;)
+    if not hmac.compare_digest(sig, sign(body)):
+        return &quot;401 bad signature&quot;
+    claims = unb64(body)
+    if claims[&quot;aud&quot;] != &quot;calendar-api&quot; or claims[&quot;exp&quot;] &lt; time.time():
+        return &quot;401 wrong audience or expired&quot;
+    need = &quot;calendar.read&quot; if action == &quot;read&quot; else &quot;calendar.write&quot;
+    if need not in claims[&quot;scope&quot;].split():
+        return f&quot;403 token lacks scope {need}&quot;
+    if owner != claims[&quot;sub&quot;]:
+        return f&quot;403 {claims['sub']} cannot access {owner}'s calendar&quot;
+    return f&quot;200 {action} {owner}'s calendar&quot;
+
+token = issue_token(&quot;meera&quot;, [&quot;calendar.read&quot;])
+claims = unb64(token.split(&quot;.&quot;)[0])
+print(&quot;token says:&quot;, {k: claims[k] for k in (&quot;sub&quot;, &quot;aud&quot;, &quot;scope&quot;)}, &quot;+ an expiry 10 minutes away&quot;)
+<span class="c"># <b>Step 3</b>: the agent acts with the USER's token, never with a powerful service account</span>
+for action, owner in [(&quot;read&quot;, &quot;meera&quot;), (&quot;write&quot;, &quot;meera&quot;), (&quot;read&quot;, &quot;ceo&quot;)]:
+    print(f&quot;agent tries to {action} {owner}'s calendar: {calendar_api(token, action, owner)}&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">token says: {'sub': 'meera', 'aud': 'calendar-api', 'scope': 'calendar.read'} + an expiry 10 minutes away
+agent tries to read meera's calendar: 200 read meera's calendar
+agent tries to write meera's calendar: 403 token lacks scope calendar.write
+agent tries to read ceo's calendar: 403 meera cannot access ceo's calendar</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Decode a token locally to read its claims (<code>sub</code>, <code>aud</code>, <code>scope</code>, <code>exp</code>): the payload is the middle part, base64url-encoded. Don’t paste real tokens into websites.</li><li>Call the target API with a token that lacks a scope and confirm you get a 403: that is the API enforcing the user’s permissions, not your agent.</li><li>Log which user and which scopes every agent tool call ran with; that audit trail is what security reviewers ask for.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="human-in-the-loop.html">

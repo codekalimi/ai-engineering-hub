@@ -26,6 +26,7 @@
         <span class="eyebrow">LangChain &amp; LangGraph · 3 of 7</span>
         <h1>How does LangGraph execute a graph?</h1>
         <p class="tldr"><span class="label">In one line</span>It runs in steps: the active nodes read the state and return updates, reducers merge the updates, a checkpoint is saved, and edges decide which nodes run next, until END.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-langgraph-run">
@@ -60,6 +61,62 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A mini LangGraph engine: state + nodes + reducers + edges + a step loop.</span>
+import operator
+
+REDUCERS = {&quot;messages&quot;: operator.add}             <span class="c"># 'messages' appends; other keys overwrite</span>
+
+def merge(state, update):
+    <span class="c"># <b>Step 3</b>: reducers merge each node's update into the state</span>
+    for k, v in update.items():
+        state[k] = REDUCERS[k](state.get(k, []), v) if k in REDUCERS else v
+    return state
+
+def agent(state):                                 <span class="c"># pretend LLM: ask for a tool once, then answer</span>
+    if not any(m.startswith(&quot;tool:&quot;) for m in state[&quot;messages&quot;]):
+        return {&quot;messages&quot;: [&quot;ai: call search('langgraph')&quot;]}
+    return {&quot;messages&quot;: [&quot;ai: LangGraph runs nodes in steps.&quot;]}
+
+def tools(state):
+    return {&quot;messages&quot;: [&quot;tool: 'LangGraph is a graph runtime'&quot;]}
+
+NODES = {&quot;agent&quot;: agent, &quot;tools&quot;: tools}
+EDGES = {&quot;tools&quot;: &quot;agent&quot;}                        <span class="c"># fixed edge: tools -> agent</span>
+def route_after_agent(state):                     <span class="c"># conditional edge: a function picks the next node</span>
+    return &quot;tools&quot; if &quot;call&quot; in state[&quot;messages&quot;][-1] else &quot;END&quot;
+CONDITIONAL = {&quot;agent&quot;: route_after_agent}
+
+checkpoints = []
+def invoke(inp, recursion_limit=10):
+    state, next_nodes = merge({}, inp), [&quot;agent&quot;]          <span class="c"># <b>Step 1</b>: input -> initial state</span>
+    for step in range(1, recursion_limit + 1):
+        if not next_nodes:
+            return state
+        updates = [(n, NODES[n](dict(state))) for n in next_nodes]   <span class="c"># <b>Step 2</b>: run scheduled nodes</span>
+        for n, u in updates:
+            state = merge(state, u)
+        checkpoints.append({&quot;step&quot;: step, &quot;state&quot;: dict(state)})      <span class="c"># <b>Step 4</b>: checkpoint</span>
+        <span class="c"># <b>Step 5</b>: edges decide the next nodes</span>
+        nxt = [CONDITIONAL[n](state) if n in CONDITIONAL else EDGES[n] for n, _ in updates]
+        print(f&quot;step {step}: ran {[n for n, _ in updates]} -> next {nxt}&quot;)
+        next_nodes = [n for n in nxt if n != &quot;END&quot;]
+    raise RuntimeError(&quot;recursion limit reached&quot;)           <span class="c"># <b>Step 6</b></span>
+
+final = invoke({&quot;messages&quot;: [&quot;user: what is langgraph?&quot;]})
+print(&quot;messages:&quot;, final[&quot;messages&quot;])
+print(&quot;checkpoints saved:&quot;, len(checkpoints))
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">step 1: ran ['agent'] -> next ['tools']
+step 2: ran ['tools'] -> next ['agent']
+step 3: ran ['agent'] -> next ['END']
+messages: ['user: what is langgraph?', &quot;ai: call search('langgraph')&quot;, &quot;tool: 'LangGraph is a graph runtime'&quot;, 'ai: LangGraph runs nodes in steps.']
+checkpoints saved: 3</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li><code>for chunk in graph.stream(inputs, stream_mode=&quot;debug&quot;): print(chunk)</code> prints every task start and result, step by step: the engine below, in real life.</li><li><code>stream_mode=&quot;updates&quot;</code> shows each node’s partial update; <code>stream_mode=&quot;values&quot;</code> shows the full state after every step.</li><li>Hit the limit on purpose with <code>graph.invoke(inputs, {&quot;recursion_limit&quot;: 3})</code> to see a GraphRecursionError.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="rag-chain.html">

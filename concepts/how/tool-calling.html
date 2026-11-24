@@ -26,6 +26,7 @@
         <span class="eyebrow">Tools &amp; agents · 1 of 7</span>
         <h1>How does tool (function) calling work?</h1>
         <p class="tldr"><span class="label">In one line</span>The model never runs code. It returns a structured request to call a tool; your app runs the tool and sends the result back for the model to use.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-toolcall">
@@ -69,6 +70,50 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># The JSON that actually goes back and forth. Field names vary a little by provider; the shape doesn't.</span>
+import json
+
+def get_weather(city):
+    return {&quot;Pune&quot;: &quot;Rain, 24C&quot;, &quot;Delhi&quot;: &quot;Sunny, 31C&quot;}.get(city, &quot;unknown&quot;)
+TOOLS = {&quot;get_weather&quot;: get_weather}
+
+<span class="c"># <b>Step 1</b>: your app sends the conversation plus the tool schemas</span>
+request = {
+    &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Do I need an umbrella in Pune today?&quot;}],
+    &quot;tools&quot;: [{&quot;name&quot;: &quot;get_weather&quot;, &quot;description&quot;: &quot;Current weather for a city&quot;,
+               &quot;input_schema&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: {&quot;city&quot;: {&quot;type&quot;: &quot;string&quot;}},
+                                &quot;required&quot;: [&quot;city&quot;]}}],
+}
+print(&quot;REQUEST ->&quot;, json.dumps(request)[:110], &quot;...&quot;)
+
+def fake_model(req):
+    last = req[&quot;messages&quot;][-1]
+    if last[&quot;role&quot;] == &quot;user&quot;:
+        <span class="c"># <b>Step 2</b>: the model replies with a structured tool call instead of text</span>
+        return {&quot;role&quot;: &quot;assistant&quot;, &quot;tool_calls&quot;: [{&quot;id&quot;: &quot;call_1&quot;, &quot;name&quot;: &quot;get_weather&quot;, &quot;arguments&quot;: {&quot;city&quot;: &quot;Pune&quot;}}]}
+    <span class="c"># <b>Step 5</b>: the model uses the result to write its answer</span>
+    return {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: f&quot;The forecast says {last['content']}, so yes, take an umbrella.&quot;}
+
+reply = fake_model(request)
+print(&quot;MODEL   ->&quot;, json.dumps(reply))
+for call in reply[&quot;tool_calls&quot;]:
+    <span class="c"># <b>Step 3</b>: YOUR code runs the function. The model never executes anything.</span>
+    result = TOOLS[call[&quot;name&quot;]](**call[&quot;arguments&quot;])
+    <span class="c"># <b>Step 4</b>: the result goes back as a tool message, linked by the tool call id</span>
+    request[&quot;messages&quot;] += [reply, {&quot;role&quot;: &quot;tool&quot;, &quot;tool_call_id&quot;: call[&quot;id&quot;], &quot;content&quot;: result}]
+    print(&quot;TOOL    ->&quot;, json.dumps(request[&quot;messages&quot;][-1]))
+print(&quot;MODEL   ->&quot;, fake_model(request)[&quot;content&quot;])
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">REQUEST -> {&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Do I need an umbrella in Pune today?&quot;}], &quot;tools&quot;: [{&quot;name&quot;: &quot;get_we ...
+MODEL   -> {&quot;role&quot;: &quot;assistant&quot;, &quot;tool_calls&quot;: [{&quot;id&quot;: &quot;call_1&quot;, &quot;name&quot;: &quot;get_weather&quot;, &quot;arguments&quot;: {&quot;city&quot;: &quot;Pune&quot;}}]}
+TOOL    -> {&quot;role&quot;: &quot;tool&quot;, &quot;tool_call_id&quot;: &quot;call_1&quot;, &quot;content&quot;: &quot;Rain, 24C&quot;}
+MODEL   -> The forecast says Rain, 24C, so yes, take an umbrella.</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>LangChain: <code>ai = model.bind_tools([get_weather]).invoke(&quot;...&quot;)</code>, then print <code>ai.tool_calls</code>: a list of <code>{&quot;name&quot;, &quot;args&quot;, &quot;id&quot;}</code> dicts. That is the model’s whole contribution.</li><li>Print <code>convert_to_openai_tool(get_weather)</code> (from <code>langchain_core.utils.function_calling</code>) to see the JSON schema your Python function becomes.</li><li>Raw SDKs: set <code>ANTHROPIC_LOG=debug</code> or <code>OPENAI_LOG=debug</code> to log each HTTP request the SDK makes; or print the response object and find the tool-call block.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="text-to-sql.html">

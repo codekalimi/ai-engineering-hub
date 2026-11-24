@@ -26,6 +26,7 @@
         <span class="eyebrow">Training &amp; fine-tuning · 3 of 5</span>
         <h1>How do RLHF and DPO (preference tuning) work?</h1>
         <p class="tldr"><span class="label">In one line</span>Both learn from comparisons where one answer is preferred over another. RLHF trains a reward model and optimizes against it; DPO trains directly on the preference pairs.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-rlhf-dpo">
@@ -64,6 +65,39 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import math
+
+<span class="c"># <b>Step 1</b>: one preference pair - same prompt, a chosen (better) and a rejected answer.</span>
+<span class="c"># Numbers are log-probabilities of each whole answer under each model.</span>
+policy = {&quot;chosen&quot;: -12.0, &quot;rejected&quot;: -11.0}       <span class="c"># the model being trained prefers the WRONG one</span>
+reference = {&quot;chosen&quot;: -12.0, &quot;rejected&quot;: -11.0}    <span class="c"># frozen copy of the starting model</span>
+beta, lr = 0.1, 5.0
+sigmoid = lambda z: 1 / (1 + math.exp(-z))
+
+<span class="c"># <b>Step 4 (DPO)</b>: raise chosen relative to the reference, lower rejected - no reward model needed</span>
+for step in range(1, 6):
+    margin = beta * ((policy[&quot;chosen&quot;] - reference[&quot;chosen&quot;]) - (policy[&quot;rejected&quot;] - reference[&quot;rejected&quot;]))
+    loss = -math.log(sigmoid(margin))
+    push = lr * beta * (1 - sigmoid(margin))            <span class="c"># size of the gradient step</span>
+    policy[&quot;chosen&quot;] += push
+    policy[&quot;rejected&quot;] -= push
+    print(f&quot;step {step}: margin {margin:+.3f}  loss {loss:.3f}  &quot;
+          f&quot;logp chosen {policy['chosen']:.2f}  rejected {policy['rejected']:.2f}&quot;)
+
+<span class="c"># <b>Step 2-3 (RLHF)</b> instead trains a reward model on such pairs and runs RL (e.g. PPO) against it,</span>
+<span class="c"># with a KL penalty that keeps the model near the reference - the role beta plays here.</span>
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">step 1: margin +0.000  loss 0.693  logp chosen -11.75  rejected -11.25
+step 2: margin +0.050  loss 0.668  logp chosen -11.51  rejected -11.49
+step 3: margin +0.099  loss 0.645  logp chosen -11.27  rejected -11.73
+step 4: margin +0.146  loss 0.623  logp chosen -11.04  rejected -11.96
+step 5: margin +0.193  loss 0.601  logp chosen -10.81  rejected -12.19</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>TRL <code>DPOTrainer</code> logs <code>rewards/chosen</code>, <code>rewards/rejected</code> and <code>rewards/margins</code>: the margin should grow during training, like below.</li><li>Look at a preference dataset on the Hugging Face Hub (columns <code>prompt</code>, <code>chosen</code>, <code>rejected</code>) to see what the training signal actually is.</li><li>If outputs get longer and longer after tuning, check whether the &quot;chosen&quot; answers in your data are simply longer: a common bias.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="lora.html">

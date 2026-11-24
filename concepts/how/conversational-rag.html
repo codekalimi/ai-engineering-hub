@@ -26,6 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 7 of 9</span>
         <h1>How does RAG handle follow-up questions in a chat?</h1>
         <p class="tldr"><span class="label">In one line</span>A follow-up like &quot;what about the second one?&quot; can't be searched as it is, so an LLM first rewrites it into a standalone question using the chat history, and that's what gets retrieved.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-conv-rag">
@@ -56,6 +57,49 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import re
+words = lambda t: set(re.findall(r&quot;[a-z]+&quot;, t.lower()))
+
+history = [
+    (&quot;user&quot;, &quot;What is our parental leave policy?&quot;),
+    (&quot;assistant&quot;, &quot;Employees get 26 weeks of paid parental leave.&quot;),
+]
+follow_up = &quot;Does it apply to contractors too?&quot;
+<span class="c"># <b>Step 1</b>: on its own, &quot;it&quot; means nothing to a search engine</span>
+
+<span class="c"># <b>Step 2</b>: a small, fast model rewrites the follow-up into a standalone question</span>
+def rewrite(history, question):
+    prompt = (&quot;Rewrite the last question so it makes sense without the chat history.\n&quot;
+              + &quot;\n&quot;.join(f&quot;{role}: {text}&quot; for role, text in history)
+              + f&quot;\nuser: {question}\nStandalone question:&quot;)
+    print(&quot;---- rewrite prompt ----\n&quot; + prompt + &quot;\n------------------------&quot;)
+    return &quot;Does the parental leave policy apply to contractors?&quot;   <span class="c"># what the small LLM returns</span>
+
+standalone = rewrite(history, follow_up)
+
+<span class="c"># <b>Step 3</b>: retrieval runs on the rewritten question</span>
+DOCS = [&quot;Contractors are paid monthly via the vendor portal.&quot;,
+        &quot;Parental leave: 26 weeks paid for employees. Contractors are not eligible.&quot;]
+best = lambda q: max(DOCS, key=lambda d: len(words(q) &amp; words(d)))
+print(&quot;search with raw follow-up ->&quot;, best(follow_up))
+print(&quot;search with rewrite       ->&quot;, best(standalone))
+<span class="c"># <b>Step 4</b>: the answer is generated from the retrieved context plus the conversation</span>
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">---- rewrite prompt ----
+Rewrite the last question so it makes sense without the chat history.
+user: What is our parental leave policy?
+assistant: Employees get 26 weeks of paid parental leave.
+user: Does it apply to contractors too?
+Standalone question:
+------------------------
+search with raw follow-up -> Contractors are paid monthly via the vendor portal.
+search with rewrite       -> Parental leave: 26 weeks paid for employees. Contractors are not eligible.</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>LangSmith or <code>set_debug(True)</code>: find the rewrite step and read the standalone question it produced; that is what was actually searched.</li><li>Log both the raw follow-up and the rewritten query for every request, and review the ones with bad answers.</li><li>Test with pronoun follow-ups (&quot;what about it?&quot;, &quot;and for contractors?&quot;): they break retrieval when there is no rewrite step.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="chunking.html">

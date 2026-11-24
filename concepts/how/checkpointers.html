@@ -26,6 +26,7 @@
         <span class="eyebrow">LangChain &amp; LangGraph · 5 of 7</span>
         <h1>How does a checkpointer let a graph remember and resume?</h1>
         <p class="tldr"><span class="label">In one line</span>After every step, the graph's state is saved under the thread_id. Calling the graph again with the same thread_id loads the latest state and carries on from there.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-checkpoint">
@@ -60,6 +61,57 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A checkpointer saves a snapshot of the state after each step, per thread_id.</span>
+<span class="c"># Here it is SQLite from the standard library, like langgraph-checkpoint-sqlite without the details.</span>
+import json, sqlite3
+
+db = sqlite3.connect(&quot;:memory:&quot;)
+db.execute(&quot;CREATE TABLE checkpoints (thread_id TEXT, step INTEGER, state TEXT)&quot;)
+
+def save(thread_id, step, state):
+    db.execute(&quot;INSERT INTO checkpoints VALUES (?, ?, ?)&quot;, (thread_id, step, json.dumps(state)))
+
+def latest(thread_id):
+    row = db.execute(&quot;SELECT step, state FROM checkpoints WHERE thread_id = ? &quot;
+                     &quot;ORDER BY step DESC LIMIT 1&quot;, (thread_id,)).fetchone()
+    return (row[0], json.loads(row[1])) if row else (0, {&quot;messages&quot;: []})
+
+def chatbot(state):
+    n = sum(m.startswith(&quot;user&quot;) for m in state[&quot;messages&quot;])
+    return f&quot;ai: that's message {n} from you&quot;
+
+<span class="c"># <b>Step 1</b>: compile(checkpointer=...) wires this in. <b>Step 2</b>: every call carries a thread_id</span>
+def invoke(message, config):
+    thread_id = config[&quot;configurable&quot;][&quot;thread_id&quot;]
+    step, state = latest(thread_id)               <span class="c"># <b>Step 4</b>: load the latest snapshot for this thread</span>
+    for update in (&quot;user: &quot; + message, None):
+        state[&quot;messages&quot;].append(update or chatbot(state))
+        step += 1
+        save(thread_id, step, state)              <span class="c"># <b>Step 3</b>: snapshot after each step</span>
+    return state[&quot;messages&quot;][-1]
+
+alice = {&quot;configurable&quot;: {&quot;thread_id&quot;: &quot;alice&quot;}}
+bob = {&quot;configurable&quot;: {&quot;thread_id&quot;: &quot;bob&quot;}}
+print(&quot;alice:&quot;, invoke(&quot;hi&quot;, alice))
+print(&quot;alice:&quot;, invoke(&quot;how are you?&quot;, alice))
+print(&quot;bob:  &quot;, invoke(&quot;hello&quot;, bob))
+<span class="c"># <b>Step 5</b>: get_state_history - every snapshot, newest first</span>
+for step, state in db.execute(&quot;SELECT step, state FROM checkpoints WHERE thread_id = 'alice' ORDER BY step DESC&quot;):
+    print(f&quot;alice step {step}: {json.loads(state)['messages']}&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">alice: ai: that's message 1 from you
+alice: ai: that's message 2 from you
+bob:   ai: that's message 1 from you
+alice step 4: ['user: hi', &quot;ai: that's message 1 from you&quot;, 'user: how are you?', &quot;ai: that's message 2 from you&quot;]
+alice step 3: ['user: hi', &quot;ai: that's message 1 from you&quot;, 'user: how are you?']
+alice step 2: ['user: hi', &quot;ai: that's message 1 from you&quot;]
+alice step 1: ['user: hi']</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li><code>for snap in graph.get_state_history(config): print(snap.config[&quot;configurable&quot;][&quot;checkpoint_id&quot;], snap.next, len(snap.values[&quot;messages&quot;]))</code> lists every saved step.</li><li>With <code>SqliteSaver</code> (package <code>langgraph-checkpoint-sqlite</code>), open the database file in any SQLite browser and look at the checkpoints table.</li><li>Time travel: invoke with an older <code>checkpoint_id</code> in the config to resume from that point.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="reducers.html">

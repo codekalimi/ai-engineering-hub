@@ -26,6 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 2 of 10</span>
         <h1>How does continuous batching work?</h1>
         <p class="tldr"><span class="label">In one line</span>Instead of waiting for a whole batch to finish, the server re-forms the batch at every token step: finished requests leave and waiting ones join immediately.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-cont-batching">
@@ -60,6 +61,50 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># The same 6 requests (output length in tokens), with 3 batch slots on the GPU.</span>
+lengths = {&quot;A&quot;: 3, &quot;B&quot;: 20, &quot;C&quot;: 4, &quot;D&quot;: 5, &quot;E&quot;: 2, &quot;F&quot;: 6}
+SLOTS = 3
+
+def static_batching(lengths):
+    <span class="c"># <b>Step 2</b>: a batch starts together and ends when its LONGEST request ends</span>
+    ids, steps, idle = list(lengths), 0, 0
+    for i in range(0, len(ids), SLOTS):
+        batch = ids[i:i + SLOTS]
+        longest = max(lengths[r] for r in batch)
+        steps += longest
+        idle += sum(longest - lengths[r] for r in batch)
+    return steps, idle
+
+def continuous_batching(lengths):
+    <span class="c"># <b>Step 3-4</b>: schedule every decode step; a finished slot is refilled straight away</span>
+    waiting, running, steps, finished = list(lengths), {}, 0, {}
+    while waiting or running:
+        while waiting and len(running) &lt; SLOTS:
+            r = waiting.pop(0)
+            running[r] = lengths[r]
+        steps += 1
+        for r in list(running):
+            running[r] -= 1
+            if running[r] == 0:
+                del running[r]
+                finished[r] = steps
+    return steps, finished
+
+s_steps, s_idle = static_batching(lengths)
+c_steps, finished = continuous_batching(lengths)
+print(f&quot;static batching:     {s_steps} decode steps, {s_idle} slot-steps wasted waiting&quot;)
+print(f&quot;continuous batching: {c_steps} decode steps&quot;)
+print(&quot;step at which each request finished:&quot;, finished)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">static batching:     26 decode steps, 38 slot-steps wasted waiting
+continuous batching: 20 decode steps
+step at which each request finished: {'A': 3, 'C': 4, 'E': 6, 'D': 8, 'F': 12, 'B': 20}</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>vLLM logs a line every few seconds with the number of running and waiting requests: send a burst of requests with very different <code>max_tokens</code> and watch waiting requests join as others finish.</li><li>Compare throughput (tokens/second) of a naive <code>model.generate()</code> loop over a fixed batch with the same prompts sent to vLLM or TGI.</li><li>Prometheus metrics such as <code>vllm:num_requests_running</code> and <code>vllm:num_requests_waiting</code> show the same thing on a dashboard.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="inference-server.html">

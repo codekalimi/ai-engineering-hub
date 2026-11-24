@@ -26,6 +26,7 @@
         <span class="eyebrow">LangChain &amp; LangGraph · 2 of 7</span>
         <h1>How does a RAG chain pass the question to both the retriever and the prompt?</h1>
         <p class="tldr"><span class="label">In one line</span>A dict at the start of the chain becomes a RunnableParallel: the same question goes to the retriever and to a passthrough at the same time, producing {context, question} for the prompt.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-rag-chain">
@@ -69,6 +70,61 @@
     | StrOutputParser()
 )</pre>
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># What {&quot;context&quot;: retriever | format_docs, &quot;question&quot;: RunnablePassthrough()} does underneath.</span>
+from concurrent.futures import ThreadPoolExecutor
+
+DOCS = [&quot;LangGraph adds state and loops.&quot;, &quot;LCEL composes runnables with pipes.&quot;, &quot;Paris is in France.&quot;]
+def retriever(question):                     <span class="c"># returns documents sharing a word with the question</span>
+    q = set(question.lower().strip(&quot;?&quot;).split())
+    return [d for d in DOCS if q &amp; set(d.lower().strip(&quot;.&quot;).split())]
+def format_docs(docs): return &quot;\n&quot;.join(f&quot;- {d}&quot; for d in docs)
+def passthrough(x): return x                 <span class="c"># RunnablePassthrough: the input, unchanged</span>
+
+def pipe(*fns):
+    def run(x):
+        for fn in fns:
+            x = fn(x)
+        return x
+    return run
+
+def parallel(branches):
+    <span class="c"># <b>Step 2</b>: a dict becomes a RunnableParallel - the SAME input goes to every branch, concurrently</span>
+    def run(x):
+        with ThreadPoolExecutor() as pool:
+            futures = {key: pool.submit(fn, x) for key, fn in branches.items()}
+            return {key: f.result() for key, f in futures.items()}
+    return run
+
+<span class="c"># <b>Step 1 + 3</b>: the context branch turns the question into text; the passthrough keeps the question</span>
+setup = parallel({&quot;context&quot;: pipe(retriever, format_docs), &quot;question&quot;: passthrough})
+<span class="c"># <b>Step 4</b>: the dict fills the prompt's {context} and {question}</span>
+def prompt(d): return f&quot;Use only this context:\n{d['context']}\n\nQuestion: {d['question']}&quot;
+<span class="c"># <b>Step 5</b>: then the usual model -> parser (stubbed)</span>
+def model(p): return f&quot;(answer written from {p.count('- ')} context line)&quot;
+
+def show(label):
+    def run(x):
+        print(f&quot;---- {label} ----\n{x}&quot;)
+        return x
+    return run
+
+chain = pipe(setup, show(&quot;after the dict step&quot;), prompt, show(&quot;prompt&quot;), model)
+print(&quot;answer:&quot;, chain(&quot;What does LCEL compose?&quot;))
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">---- after the dict step ----
+{'context': '- LCEL composes runnables with pipes.', 'question': 'What does LCEL compose?'}
+---- prompt ----
+Use only this context:
+- LCEL composes runnables with pipes.
+
+Question: What does LCEL compose?
+answer: (answer written from 1 context line)</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Run just the first step to see the dict the prompt receives: <code>setup = RunnableParallel(context=retriever | format_docs, question=RunnablePassthrough()); print(setup.invoke(&quot;...&quot;))</code>.</li><li>Print the filled prompt: <code>(setup | prompt).invoke(&quot;...&quot;).to_string()</code> shows the exact text before the model is called.</li><li><code>chain.get_graph().print_ascii()</code> draws the two parallel branches joining at the prompt.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="lcel.html">

@@ -26,6 +26,7 @@
         <span class="eyebrow">LangChain &amp; LangGraph · 4 of 7</span>
         <h1>How do reducers merge state updates in LangGraph?</h1>
         <p class="tldr"><span class="label">In one line</span>Each state key can have a reducer that decides how a node's update combines with the current value. Without one, the new value overwrites the old.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-reducers">
@@ -67,6 +68,53 @@ class State(TypedDict):
     sources: Annotated[list, add]             # concatenate lists
     status: str                               # overwrite</pre>
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import itertools, operator
+
+_ids = itertools.count(1)
+def msg(role, text, id=None):
+    return {&quot;id&quot;: id or f&quot;m{next(_ids)}&quot;, &quot;role&quot;: role, &quot;text&quot;: text}
+
+def add_messages(current, new):
+    <span class="c"># <b>Step 3</b>: append new messages, but a message with an existing id REPLACES that message</span>
+    merged = list(current)
+    position = {m[&quot;id&quot;]: i for i, m in enumerate(merged)}
+    for m in new:
+        if m[&quot;id&quot;] in position:
+            merged[position[m[&quot;id&quot;]]] = m
+        else:
+            position[m[&quot;id&quot;]] = len(merged)
+            merged.append(m)
+    return merged
+
+<span class="c"># <b>Step 1</b>: the schema annotates keys with reducers:</span>
+<span class="c">#   messages: Annotated[list, add_messages]   sources: Annotated[list, operator.add]   status: str</span>
+REDUCERS = {&quot;messages&quot;: add_messages, &quot;sources&quot;: operator.add}
+
+def apply(state, update, node):
+    <span class="c"># <b>Step 2</b>: for each key in the update, call reducer(current, new)</span>
+    <span class="c"># <b>Step 4</b>: keys without a reducer simply take the new value</span>
+    for key, value in update.items():
+        reducer = REDUCERS.get(key)
+        state[key] = reducer(state.get(key, []), value) if reducer else value
+    shown = {k: ([m[&quot;id&quot;] + &quot;:&quot; + m[&quot;text&quot;] for m in v] if k == &quot;messages&quot; else v) for k, v in state.items()}
+    print(f&quot;after {node:9} {shown}&quot;)
+
+state = {}
+apply(state, {&quot;messages&quot;: [msg(&quot;user&quot;, &quot;hi&quot;)], &quot;status&quot;: &quot;start&quot;}, &quot;input&quot;)
+apply(state, {&quot;messages&quot;: [msg(&quot;ai&quot;, &quot;draft&quot;, id=&quot;a1&quot;)], &quot;sources&quot;: [&quot;doc1&quot;], &quot;status&quot;: &quot;drafted&quot;}, &quot;writer&quot;)
+apply(state, {&quot;sources&quot;: [&quot;doc2&quot;]}, &quot;retriever&quot;)
+apply(state, {&quot;messages&quot;: [msg(&quot;ai&quot;, &quot;final&quot;, id=&quot;a1&quot;)], &quot;status&quot;: &quot;done&quot;}, &quot;editor&quot;)   <span class="c"># same id -> replaced</span>
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">after input     {'messages': ['m1:hi'], 'status': 'start'}
+after writer    {'messages': ['m1:hi', 'a1:draft'], 'status': 'drafted', 'sources': ['doc1']}
+after retriever {'messages': ['m1:hi', 'a1:draft'], 'status': 'drafted', 'sources': ['doc1', 'doc2']}
+after editor    {'messages': ['m1:hi', 'a1:final'], 'status': 'done', 'sources': ['doc1', 'doc2']}</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Compare <code>graph.stream(inputs, stream_mode=&quot;updates&quot;)</code> (what each node returned) with <code>stream_mode=&quot;values&quot;</code> (the state after the reducers ran).</li><li>Return two updates to the same plain key from parallel nodes and read the error: LangGraph refuses to guess how to combine them.</li><li>Read <code>add_messages</code> in <code>langgraph/graph/message.py</code>: it is short and does exactly the id-based append-or-replace shown below.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="langgraph-execution.html">

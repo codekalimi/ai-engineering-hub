@@ -26,6 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 6 of 9</span>
         <h1>How does recursive text splitting work?</h1>
         <p class="tldr"><span class="label">In one line</span>It splits on the biggest natural boundary first (paragraphs) and only falls back to smaller ones (lines, words, characters) for pieces that are still too big, then adds overlap.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-chunking">
@@ -56,6 +57,50 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A small version of LangChain's RecursiveCharacterTextSplitter.</span>
+text = (&quot;RAG systems split documents into chunks.\n\nEach chunk is embedded separately. &quot;
+        &quot;Chunks that are too big blur the meaning; chunks that are too small lose context.\n\n&quot;
+        &quot;Overlap repeats a little text between neighbouring chunks.&quot;)
+<span class="c"># <b>Step 1</b>: an ordered list of separators, from biggest to smallest</span>
+SEPARATORS = [&quot;\n\n&quot;, &quot;\n&quot;, &quot;. &quot;, &quot; &quot;, &quot;&quot;]
+
+def split(text, size, seps=SEPARATORS):
+    <span class="c"># <b>Step 2</b>: split on the first separator</span>
+    sep, rest = seps[0], seps[1:]
+    pieces = [p for p in (text.split(sep) if sep else list(text)) if p]
+    small = []
+    for p in pieces:
+        <span class="c"># <b>Step 3</b>: pieces still too big are split again with the next separator</span>
+        small.extend([p] if len(p) &lt;= size else split(p, size, rest))
+    <span class="c"># <b>Step 4</b>: merge small neighbours back together, up to the chunk size</span>
+    chunks, cur = [], &quot;&quot;
+    for p in small:
+        candidate = cur + sep + p if cur else p
+        if len(candidate) &lt;= size:
+            cur = candidate
+        else:
+            chunks.append(cur)
+            cur = p
+    return chunks + ([cur] if cur else [])
+
+def add_overlap(chunks, n_words=3):
+    <span class="c"># <b>Step 5</b>: start each chunk with the last few words of the previous one</span>
+    return [chunks[0]] + [&quot; &quot;.join(prev.split()[-n_words:]) + &quot; ... &quot; + c for prev, c in zip(chunks, chunks[1:])]
+
+for i, c in enumerate(add_overlap(split(text, 70)), 1):
+    print(f&quot;chunk {i} ({len(c)} chars): {c!r}&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">chunk 1 (40 chars): 'RAG systems split documents into chunks.'
+chunk 2 (60 chars): 'documents into chunks. ... Each chunk is embedded separately'
+chunk 3 (94 chars): 'is embedded separately ... Chunks that are too big blur the meaning; chunks that are too small'
+chunk 4 (31 chars): 'are too small ... lose context.'
+chunk 5 (76 chars): 'lose context. ... Overlap repeats a little text between neighbouring chunks.'</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>LangChain: <code>RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=20).split_text(text)</code>; print each chunk with <code>len(chunk)</code> and look at where it cut.</li><li>Use <code>RecursiveCharacterTextSplitter.from_language(Language.PYTHON, ...)</code> for code: its separators are class and def boundaries.</li><li>Open 10 random chunks from your real index and ask: would a person understand this chunk on its own?</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="reranking.html">

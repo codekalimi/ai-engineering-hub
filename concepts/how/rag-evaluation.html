@@ -26,6 +26,7 @@
         <span class="eyebrow">Quality, safety &amp; operations · 3 of 6</span>
         <h1>How do you measure RAG quality (retrieval vs generation)?</h1>
         <p class="tldr"><span class="label">In one line</span>Score the two halves separately: did retrieval find the right chunks, and is the answer faithful to those chunks, relevant to the question and correct?</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-rag-eval">
@@ -60,6 +61,43 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># <b>Step 1</b>: for each test question, which chunk ids contain the answer</span>
+tests = [
+    {&quot;q&quot;: &quot;refund window&quot;, &quot;relevant&quot;: {&quot;c7&quot;}, &quot;retrieved&quot;: [&quot;c2&quot;, &quot;c7&quot;, &quot;c9&quot;],
+     &quot;context&quot;: &quot;refunds within 30 days&quot;, &quot;answer&quot;: &quot;30 days&quot;, &quot;reference&quot;: &quot;30 days&quot;},
+    {&quot;q&quot;: &quot;warranty length&quot;, &quot;relevant&quot;: {&quot;c4&quot;}, &quot;retrieved&quot;: [&quot;c1&quot;, &quot;c3&quot;, &quot;c8&quot;],
+     &quot;context&quot;: &quot;shipping takes 3 days&quot;, &quot;answer&quot;: &quot;1 year&quot;, &quot;reference&quot;: &quot;2 years&quot;},
+    {&quot;q&quot;: &quot;support hours&quot;, &quot;relevant&quot;: {&quot;c5&quot;}, &quot;retrieved&quot;: [&quot;c5&quot;, &quot;c6&quot;, &quot;c2&quot;],
+     &quot;context&quot;: &quot;support 9am to 5pm weekdays&quot;, &quot;answer&quot;: &quot;9am to 5pm, also weekends&quot;, &quot;reference&quot;: &quot;9am to 5pm&quot;},
+]
+k = 3
+for t in tests:
+    <span class="c"># <b>Step 2</b>: retrieval metrics - was a right chunk in the top k, and how high?</span>
+    rank = next((i + 1 for i, c in enumerate(t[&quot;retrieved&quot;][:k]) if c in t[&quot;relevant&quot;]), None)
+    t[&quot;recall&quot;], t[&quot;rr&quot;] = rank is not None, (1 / rank if rank else 0.0)
+    <span class="c"># <b>Step 3</b>: faithfulness - is every claim in the context? (an LLM judge in real life)</span>
+    claims = [c.strip().replace(&quot;also &quot;, &quot;&quot;) for c in t[&quot;answer&quot;].split(&quot;,&quot;)]
+    t[&quot;faithful&quot;] = all(c in t[&quot;context&quot;] for c in claims)
+    <span class="c"># <b>Step 5</b>: correctness against the reference answer (<b>Step 4</b>, relevance, is judged similarly)</span>
+    t[&quot;correct&quot;] = t[&quot;answer&quot;].startswith(t[&quot;reference&quot;])
+    print(f&quot;{t['q']:16} recall@{k}={int(t['recall'])}  RR={t['rr']:.2f}  faithful={t['faithful']}  correct={t['correct']}&quot;)
+n = len(tests)
+print(f&quot;recall@{k} = {sum(t['recall'] for t in tests)}/{n}, MRR = {sum(t['rr'] for t in tests) / n:.2f}&quot;)
+print(&quot;diagnosis: 'warranty' failed at retrieval (fix search); 'support hours' retrieved well but&quot;)
+print(&quot;           added an unsupported claim (fix the prompt or the model)&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">refund window    recall@3=1  RR=0.50  faithful=True  correct=True
+warranty length  recall@3=0  RR=0.00  faithful=False  correct=False
+support hours    recall@3=1  RR=1.00  faithful=False  correct=True
+recall@3 = 2/3, MRR = 0.50
+diagnosis: 'warranty' failed at retrieval (fix search); 'support hours' retrieved well but
+           added an unsupported claim (fix the prompt or the model)</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Log the retrieved chunk ids for every test question; recall@k and MRR need nothing more than those ids and your labels.</li><li>Libraries such as Ragas, DeepEval and LangSmith evaluators provide faithfulness and relevance judges; read a sample of their verdicts before trusting the numbers.</li><li>For every failure, decide first: was the right chunk retrieved? That single question splits retrieval bugs from generation bugs.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="llm-as-judge.html">

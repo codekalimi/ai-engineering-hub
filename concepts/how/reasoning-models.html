@@ -26,6 +26,7 @@
         <span class="eyebrow">Inside the LLM · 7 of 8</span>
         <h1>How do reasoning (thinking) models work?</h1>
         <p class="tldr"><span class="label">In one line</span>They're trained to write out intermediate reasoning before the final answer. Spending more tokens on thinking lets them solve harder multi-step problems.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-reasoning">
@@ -56,6 +57,47 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Thinking = writing intermediate steps before answering. RL rewards chains that reach right answers.</span>
+import random
+random.seed(3)
+
+def think_and_answer(a, b, budget, slip=0.15):
+    <span class="c"># computes a x b via partial products; each written step may contain a small slip</span>
+    tens, ones = b // 10 * 10, b % 10
+    steps = [(f&quot;{a} x {tens}&quot;, a * tens), (f&quot;{a} x {ones}&quot;, a * ones)]
+    thoughts, total = [], 0
+    for i, (text, value) in enumerate(steps):
+        if i >= budget:                          <span class="c"># out of thinking budget: guess</span>
+            value = a * b // 20 * 10
+            text += &quot; (guessed)&quot;
+        elif random.random() &lt; slip:
+            value += random.choice([-10, 10])    <span class="c"># an arithmetic slip</span>
+        thoughts.append(f&quot;{text} = {value}&quot;)
+        total += value
+    return thoughts, total
+
+<span class="c"># <b>Step 1 + 3</b>: think first (often hidden), then answer. <b>Step 4</b>: the budget trades cost for quality</span>
+for budget in (0, 2):
+    thoughts, answer = think_and_answer(17, 24, budget)
+    print(f&quot;budget {budget}: thinking {thoughts} -> answer {answer}&quot;)
+
+<span class="c"># <b>Step 2</b>: RL with a verifiable reward - sample many chains, reward the ones that are right</span>
+correct = 17 * 24
+samples = [think_and_answer(17, 24, 2) for _ in range(8)]
+rewards = [1 if ans == correct else 0 for _, ans in samples]
+print(&quot;rewards for 8 sampled chains:&quot;, rewards)
+print(&quot;training raises the probability of the rewarded chains, so careful reasoning becomes the habit&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">budget 0: thinking ['17 x 20 (guessed) = 200', '17 x 4 (guessed) = 200'] -> answer 400
+budget 2: thinking ['17 x 20 = 340', '17 x 4 = 68'] -> answer 408
+rewards for 8 sampled chains: [1, 0, 1, 1, 1, 1, 1, 1]
+training raises the probability of the rewarded chains, so careful reasoning becomes the habit</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Anthropic API: enable extended thinking with <code>thinking={&quot;type&quot;: &quot;enabled&quot;, &quot;budget_tokens&quot;: 4000}</code>; the response contains <code>thinking</code> blocks before the <code>text</code> block.</li><li>OpenAI-style APIs report hidden reasoning in usage, e.g. <code>usage.completion_tokens_details.reasoning_tokens</code>: compare it with the visible answer length.</li><li>Run one hard question at low and high effort/budget and compare accuracy, latency and tokens.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="training-pipeline.html">

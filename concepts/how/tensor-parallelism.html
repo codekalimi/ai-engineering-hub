@@ -26,6 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 6 of 10</span>
         <h1>How does tensor parallelism split a model across GPUs?</h1>
         <p class="tldr"><span class="label">In one line</span>Each layer's weight matrices are split across GPUs; every GPU computes its slice in parallel, and the partial results are combined over a fast link before the next layer.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-tensor-parallel">
@@ -64,6 +65,39 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># y = W x for one layer, computed on 1 GPU, then split across 2 &quot;GPUs&quot;.</span>
+W = [[1, 2, 0, 1],
+     [0, 1, 3, 1],
+     [2, 0, 1, 0],
+     [1, 1, 1, 1]]
+x = [1, 2, 3, 4]
+matvec = lambda M, v: [sum(a * b for a, b in zip(row, v)) for row in M]
+print(&quot;single GPU:      &quot;, matvec(W, x))
+
+<span class="c"># <b>Step 1</b>: split the weight matrix, one slice per GPU (here: by output rows)</span>
+gpu0, gpu1 = W[:2], W[2:]
+<span class="c"># <b>Step 2</b>: every GPU multiplies the SAME input by its own slice</span>
+part0, part1 = matvec(gpu0, x), matvec(gpu1, x)
+print(&quot;gpu0:&quot;, part0, &quot; gpu1:&quot;, part1)
+<span class="c"># <b>Step 3</b>: all-gather the pieces over NVLink so every GPU has the full output</span>
+print(&quot;all-gather:      &quot;, part0 + part1)
+
+<span class="c"># The other split: by input columns. Each GPU gets a PARTIAL SUM, combined with an all-reduce (add).</span>
+W0, W1 = [row[:2] for row in W], [row[2:] for row in W]
+p0, p1 = matvec(W0, x[:2]), matvec(W1, x[2:])
+print(&quot;partial sums:&quot;, p0, p1, &quot;-> all-reduce:&quot;, [a + b for a, b in zip(p0, p1)])
+<span class="c"># <b>Step 4</b>: this happens in every layer, so GPUs talk constantly - keep tensor parallelism inside one node</span>
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">single GPU:       [9, 15, 5, 10]
+gpu0: [9, 15]  gpu1: [5, 10]
+all-gather:       [9, 15, 5, 10]
+partial sums: [5, 2, 2, 3] [4, 13, 3, 7] -> all-reduce: [9, 15, 5, 10]</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>vLLM: <code>vllm serve &lt;model> --tensor-parallel-size 2</code>, then <code>nvidia-smi</code> shows the weights split across both GPUs, each using about half the weight memory.</li><li><code>nvidia-smi topo -m</code> shows how GPUs are connected (NVLink vs PCIe); tensor parallelism needs the fast links.</li><li>Set <code>NCCL_DEBUG=INFO</code> to see the communication library set up the all-reduce/all-gather channels at startup.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="speculative-decoding.html">

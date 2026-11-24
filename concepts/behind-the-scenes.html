@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Behind the Scenes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="shell" data-root="../" data-page="concepts/behind-the-scenes" data-spy="1">
+  <nav class="sidebar" id="sidebar" aria-label="Index"></nav>
+  <div class="scrim"></div>
+  <div class="main">
+    <div class="topbar">
+      <button class="icon-btn" id="navToggle" type="button" aria-controls="sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span class="t">Index</span></button>
+      <span class="crumbs"><a href="../index.html">Home</a> / <a href="how-it-works.html">Concepts</a> / How to see behind the scenes</span>
+    </div>
+    <main class="content">
+      <header class="page-head">
+        <span class="eyebrow">Concepts · Debugging toolkit</span>
+        <h1>How to See Behind the Scenes</h1>
+        <p>Every AI framework is ordinary code. It builds some JSON, sends an HTTP request, reads the reply, and often does that in a loop. Once you can see each of those moves, nothing is magic. This page lists the ways to watch each layer, from the HTTP request down to the GPU. Every <a href="how-it-works.html">How it works</a> page also has a small program you can run.</p>
+      </header>
+
+      <section class="section" id="layers">
+        <div class="section-head">
+          <h2>The layers to look at</h2>
+          <p>A request passes through these layers. Each one has its own way to look inside; the numbers point to the sections below.</p>
+        </div>
+        <div class="fd flow">
+          <div class="frow"><div class="fsteps">
+            <span class="fn k-io"><b>Your code</b><small>chain / graph / agent</small></span>
+            <span class="fpair"><span class="farr" aria-hidden="true"><svg viewBox="0 0 24 12"><path d="M0 6h20"/><path d="M15 1l6 5-6 5"/></svg></span><span class="fn"><b>Framework</b><small>LangChain, LangGraph · 2–7</small></span></span>
+            <span class="fpair"><span class="farr" aria-hidden="true"><svg viewBox="0 0 24 12"><path d="M0 6h20"/><path d="M15 1l6 5-6 5"/></svg></span><span class="fn"><b>SDK</b><small>builds the request</small></span></span>
+            <span class="fpair"><span class="farr" aria-hidden="true"><svg viewBox="0 0 24 12"><path d="M0 6h20"/><path d="M15 1l6 5-6 5"/></svg></span><span class="fn k-check"><b>HTTP + JSON</b><small>what really goes out · 1</small></span></span>
+            <span class="fpair"><span class="farr" aria-hidden="true"><svg viewBox="0 0 24 12"><path d="M0 6h20"/><path d="M15 1l6 5-6 5"/></svg></span><span class="fn"><b>Model server</b><small>API or vLLM · 10</small></span></span>
+            <span class="fpair"><span class="farr" aria-hidden="true"><svg viewBox="0 0 24 12"><path d="M0 6h20"/><path d="M15 1l6 5-6 5"/></svg></span><span class="fn k-model"><b>Model on GPU</b><small>tokens, attention · 9</small></span></span>
+          </div></div>
+        </div>
+        <div class="tbl"><table>
+          <thead><tr><th>You want to know…</th><th>Look at</th><th>Section</th></tr></thead>
+          <tbody>
+            <tr><td>What exactly was sent to the model?</td><td>The HTTP request body, or the trace’s prompt</td><td><a href="#wire">1</a>, <a href="#trace">4</a></td></tr>
+            <tr><td>Which step changed my data, and how?</td><td>Debug output, or events step by step</td><td><a href="#debug">2</a>, <a href="#events">3</a></td></tr>
+            <tr><td>Why did the agent call that tool?</td><td>The message list: each AI message and its tool calls</td><td><a href="#debug">2</a>, <a href="#trace">4</a></td></tr>
+            <tr><td>What does my graph look like, and what state is saved?</td><td>The drawn graph, get_state and its history</td><td><a href="#state">5</a></td></tr>
+            <tr><td>What does this class actually do?</td><td>Its source code, or step into it with a debugger</td><td><a href="#source">6</a>, <a href="#debugger">7</a></td></tr>
+            <tr><td>Why is it slow or out of memory?</td><td>Server metrics and GPU memory</td><td><a href="#serving">10</a></td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section class="section" id="wire">
+        <div class="section-head">
+          <h2>1. See the HTTP request and response</h2>
+          <p>Every framework ends in an HTTP call. Seeing the raw JSON once makes everything above it easier to understand: messages, tool schemas, tool calls and usage are all just fields.</p>
+        </div>
+        <div class="guide-grid">
+          <div class="guide-card">
+            <h3>Call the API yourself with curl</h3>
+            <div class="guide-block"><pre data-copy>curl https://api.anthropic.com/v1/messages \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model": "claude-haiku-5-5", "max_tokens": 200,
+       "messages": [{"role": "user", "content": "Hi"}]}'</pre></div>
+            <p>The reply is JSON with the content blocks, <code>stop_reason</code> and <code>usage</code> (token counts). A local OpenAI-compatible server (vLLM, Ollama) works the same way at <code>http://localhost:&lt;port&gt;/v1/chat/completions</code>.</p>
+          </div>
+          <div class="guide-card">
+            <h3>Make the SDK log its requests</h3>
+            <ul>
+              <li>Set <code>ANTHROPIC_LOG=debug</code> or <code>OPENAI_LOG=debug</code> before running your script to log each request the SDK makes.</li>
+              <li>Or in Python: <code>logging.basicConfig(level=logging.DEBUG)</code>. The <code>httpx</code> library then logs every URL and status code.</li>
+              <li>In LangChain, the reply already carries a lot: print <code>ai.response_metadata</code>, <code>ai.usage_metadata</code> and <code>ai.tool_calls</code>.</li>
+              <li>To see everything on the wire, an HTTP debugging proxy such as mitmproxy shows full requests and responses.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="debug">
+        <div class="section-head">
+          <h2>2. Turn on the framework’s debug output</h2>
+          <p>LangChain can print every step’s input and output as it runs. Use this first when a chain or agent surprises you.</p>
+        </div>
+        <div class="guide-grid">
+          <div class="guide-block"><pre data-copy>from langchain_core.globals import set_debug, set_verbose
+
+set_debug(True)     # every run: inputs, outputs, timings (very detailed)
+# set_verbose(True) # a lighter version
+
+chain.invoke({"question": "..."})</pre></div>
+          <div class="guide-block"><pre data-copy># Agents: read the whole conversation, turn by turn
+result = agent.invoke({"messages": [("user", "Book the cheapest flight")]})
+for m in result["messages"]:
+    m.pretty_print()   # Human, AI (with tool calls), Tool results, final AI</pre></div>
+        </div>
+      </section>
+
+      <section class="section" id="events">
+        <div class="section-head">
+          <h2>3. Stream every internal event</h2>
+          <p>Streaming isn’t only for showing tokens to users. Every step reports when it starts and ends, so you can watch the order things happen in.</p>
+        </div>
+        <div class="guide-grid">
+          <div class="guide-block"><pre data-copy>import asyncio
+
+async def main():
+    async for ev in chain.astream_events({"question": "..."}, version="v2"):
+        print(ev["event"], ev["name"])
+        # on_chain_start, on_prompt_end, on_chat_model_stream (one per token), ...
+
+asyncio.run(main())</pre></div>
+          <div class="guide-block"><pre data-copy># LangGraph: one line per step
+for chunk in graph.stream(inputs, config, stream_mode="updates"):
+    print(chunk)          # {"node_name": {what that node returned}}
+
+# full state after each step:       stream_mode="values"
+# every task start and result:      stream_mode="debug"
+# inside subgraphs too:             subgraphs=True</pre></div>
+        </div>
+      </section>
+
+      <section class="section" id="trace">
+        <div class="section-head">
+          <h2>4. Trace it</h2>
+          <p>A tracer records every run as a tree: the chain, then the retriever, the model and each tool, each with exact inputs, outputs, tokens and time. It’s the most useful single view of an AI app.</p>
+        </div>
+        <div class="guide-grid">
+          <div class="guide-card">
+            <h3>LangSmith: environment variables only</h3>
+            <div class="guide-block"><pre data-copy>export LANGSMITH_TRACING=true
+export LANGSMITH_API_KEY=...
+export LANGSMITH_PROJECT=my-experiments   # optional
+python app.py</pre></div>
+            <p>Open the run and read it top to bottom. Langfuse and OpenTelemetry-based tools give similar views.</p>
+          </div>
+          <div class="guide-card">
+            <h3>Or write your own handler</h3>
+            <div class="guide-block"><pre data-copy>from langchain_core.callbacks import BaseCallbackHandler
+
+class Spy(BaseCallbackHandler):
+    def on_chat_model_start(self, serialized, messages, **kw):
+        print("MODEL IN:", messages)
+    def on_llm_end(self, response, **kw):
+        print("MODEL OUT:", response.generations[0][0].text)
+    def on_tool_start(self, serialized, input_str, **kw):
+        print("TOOL:", (serialized or {}).get("name"), input_str)
+
+chain.invoke(inputs, config={"callbacks": [Spy()]})</pre></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="state">
+        <div class="section-head">
+          <h2>5. Inspect structure and state</h2>
+          <p>Print what the framework built from your code, and what it saved between steps.</p>
+        </div>
+        <div class="guide-grid">
+          <div class="guide-block"><pre data-copy># What did | build?
+print(type(chain).__name__)        # RunnableSequence
+print(chain.steps)                 # the parts, in order
+chain.get_graph().print_ascii()    # needs: pip install grandalf
+
+# A LangGraph graph as a Mermaid diagram
+print(graph.get_graph().draw_mermaid())</pre></div>
+          <div class="guide-block"><pre data-copy>config = {"configurable": {"thread_id": "t1"}}
+
+state = graph.get_state(config)
+print(state.values)    # the current state
+print(state.next)      # which node runs next (e.g. after an interrupt)
+
+for snap in graph.get_state_history(config):   # every checkpoint, newest first
+    print(snap.next, list(snap.values))</pre></div>
+        </div>
+      </section>
+
+      <section class="section" id="source">
+        <div class="section-head">
+          <h2>6. Read the source</h2>
+          <p>The core classes are smaller than they look. Reading one after rebuilding it in miniature (the How it works programs) is the fastest way to really understand it.</p>
+        </div>
+        <div class="guide-grid">
+          <div class="guide-block"><pre data-copy>import inspect
+from langchain_core.runnables import RunnableSequence
+
+print(inspect.getsourcefile(RunnableSequence))     # where the file is
+print(inspect.getsource(RunnableSequence.invoke))  # the actual code</pre></div>
+          <div class="guide-card">
+            <h3>Good files to start with</h3>
+            <ul>
+              <li><code>langchain_core/runnables/base.py</code>: Runnable, <code>__or__</code>, RunnableSequence, RunnableParallel</li>
+              <li><code>langchain_core/language_models/chat_models.py</code>: BaseChatModel, how invoke becomes a provider call</li>
+              <li><code>langgraph/graph/message.py</code>: <code>add_messages</code></li>
+              <li><code>langgraph/pregel/</code>: the step engine that runs graphs</li>
+            </ul>
+            <p>In VS Code or PyCharm, put the cursor on a class name and use Go to Definition (F12 in VS Code) to jump into the installed library.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="debugger">
+        <div class="section-head">
+          <h2>7. Step through it in a debugger</h2>
+          <p>Stop just before the call and step into the library line by line, watching variables change.</p>
+        </div>
+        <div class="guide-grid">
+          <div class="guide-block"><pre data-copy>breakpoint()            # Python's built-in debugger stops here
+chain.invoke(inputs)
+
+# at the (Pdb) prompt:
+#   s   step into the next call (into LangChain's code)
+#   n   next line      c   continue     w   where am I (call stack)
+#   p some_variable    print a value</pre></div>
+          <div class="guide-card">
+            <h3>VS Code</h3>
+            <p>By default the debugger skips library code. To step into LangChain, set this in <code>.vscode/launch.json</code>:</p>
+            <div class="guide-block"><pre data-copy>"justMyCode": false</pre></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="offline">
+        <div class="section-head">
+          <h2>8. Run without an API key</h2>
+          <p>A fake or local model makes experiments free and repeatable, so you can focus on what the framework does.</p>
+        </div>
+        <div class="guide-grid">
+          <div class="guide-block"><pre data-copy>from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+
+model = GenericFakeChatModel(messages=iter(["Paris is the capital of France."]))
+chain = prompt | model | StrOutputParser()
+print(chain.invoke({"country": "France"}))   # no network call</pre></div>
+          <div class="guide-card">
+            <h3>Or a real model on your laptop</h3>
+            <ul>
+              <li>Install Ollama, run <code>ollama run llama3.2</code>, then use <code>ChatOllama(model="llama3.2")</code> from <code>langchain-ollama</code>.</li>
+              <li>The <a href="how-it-works.html">How it works</a> programs need nothing at all: plain <code>python3</code>.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="model">
+        <div class="section-head">
+          <h2>9. Look inside a model</h2>
+          <p>With a small open model you can watch the real mechanics: the layers, the tokens and the next-token probabilities. This needs <code>pip install torch transformers</code>, and the model download is about 1 GB.</p>
+        </div>
+        <div class="guide-block"><pre data-copy>import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+name = "Qwen/Qwen2.5-0.5B-Instruct"
+tok = AutoTokenizer.from_pretrained(name)
+model = AutoModelForCausalLM.from_pretrained(name)
+print(model)                                     # every layer: embeddings, attention, MLP, lm_head
+print(tok.tokenize("unbelievable tokenization")) # the pieces the model actually sees
+
+ids = tok("The capital of France is", return_tensors="pt").input_ids
+for _ in range(5):                               # the generation loop, by hand
+    with torch.no_grad():
+        logits = model(ids).logits[0, -1]        # one score per vocabulary token
+    top = torch.topk(logits.softmax(-1), 3)
+    print([(tok.decode(int(i)), round(p.item(), 2)) for p, i in zip(top.values, top.indices)])
+    ids = torch.cat([ids, top.indices[:1].view(1, 1)], dim=1)   # greedy: append the best
+print(tok.decode(ids[0]))</pre></div>
+      </section>
+
+      <section class="section" id="serving">
+        <div class="section-head">
+          <h2>10. Watch the serving layer</h2>
+          <p>When the question is speed, memory or cost, look at the server and the GPU, not the prompt.</p>
+        </div>
+        <div class="guide-grid">
+          <div class="guide-block"><pre data-copy>nvidia-smi -l 1                 # GPU memory and utilization, every second
+curl -s localhost:8000/metrics | grep -E "vllm:num_requests|cache"
+                                # running / waiting requests, KV-cache use
+kubectl get hpa -w              # autoscaler decisions as load changes
+kubectl get pods -w             # how long new replicas take to become Ready</pre></div>
+          <div class="guide-card">
+            <h3>What to read</h3>
+            <ul>
+              <li><b>vLLM startup log:</b> model load time and the KV-cache size, which sets how many requests fit at once.</li>
+              <li><b>Waiting requests going up:</b> you’re out of capacity (KV memory or replicas).</li>
+              <li><b>Time to first token going up while throughput is fine:</b> long prompts or a queue. Look at prefill and prompt caching.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="method">
+        <div class="section-head">
+          <h2>A method for any new tool</h2>
+          <p>Use this when you meet an unfamiliar framework or feature, in a job or before an interview.</p>
+        </div>
+        <ol class="guide-card" style="padding-left: 38px">
+          <li><b>Say the idea in one line.</b> What does it take in and give back? (The "In one line" box on each How it works page.)</li>
+          <li><b>Run the smallest example with debug output on</b> (sections 2–3), and read every line it prints.</li>
+          <li><b>Find the HTTP call</b> (section 1). What exactly does the model receive?</li>
+          <li><b>Rebuild it in 30–50 lines</b> of plain Python, like the programs on every How it works page. If you can rebuild it, you understand it.</li>
+          <li><b>Read the real source</b> for the core class (section 6). It will look familiar now.</li>
+          <li><b>Break it on purpose:</b> a wrong tool argument, a tiny step limit, a missing thread_id. Then read the error messages.</li>
+        </ol>
+      </section>
+
+      <footer>Related: <a href="how-it-works.html">How it works</a> (every explanation with a runnable program) · <a href="../langchain/under-the-hood.html">LangChain under the hood</a> (animated flows) · <a href="../langchain/components.html">Components</a>.</footer>
+    </main>
+  </div>
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

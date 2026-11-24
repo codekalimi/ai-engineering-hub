@@ -26,6 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 9 of 10</span>
         <h1>How does semantic caching work?</h1>
         <p class="tldr"><span class="label">In one line</span>Questions are embedded; if a new question is close enough in meaning to one already answered, the stored answer is returned without calling the LLM.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-semantic-cache">
@@ -60,6 +61,53 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import math
+<span class="c"># Toy embedding: count words after mapping synonyms to the same meaning (a real system uses a model).</span>
+MEANING = {&quot;refund&quot;: &quot;refund&quot;, &quot;money&quot;: &quot;refund&quot;, &quot;back&quot;: &quot;refund&quot;, &quot;ship&quot;: &quot;ship&quot;, &quot;arrive&quot;: &quot;ship&quot;,
+           &quot;delivery&quot;: &quot;ship&quot;, &quot;cancel&quot;: &quot;cancel&quot;, &quot;order&quot;: &quot;order&quot;, &quot;subscription&quot;: &quot;sub&quot;}
+
+def embed(text):
+    v = {}
+    for w in text.lower().strip(&quot;?&quot;).split():
+        if w in MEANING:
+            v[MEANING[w]] = v.get(MEANING[w], 0) + 1
+    return v
+
+def cosine(a, b):
+    dot = sum(a[k] * b.get(k, 0) for k in a)
+    na, nb = math.sqrt(sum(x * x for x in a.values())), math.sqrt(sum(x * x for x in b.values()))
+    return dot / (na * nb) if na and nb else 0.0
+
+cache, THRESHOLD, llm_calls = [], 0.9, 0
+def ask(question):
+    global llm_calls
+    v = embed(question)                                                  <span class="c"># <b>Step 1</b></span>
+    best = max(cache, key=lambda e: cosine(v, e[0]), default=None)       <span class="c"># <b>Step 2</b></span>
+    score = cosine(v, best[0]) if best else 0.0
+    if score >= THRESHOLD:                                               <span class="c"># <b>Step 3</b></span>
+        print(f&quot;HIT  {score:.2f} {question!r} -> reuse the answer to {best[1]!r}&quot;)
+        return best[2]
+    llm_calls += 1                                                       <span class="c"># <b>Step 4</b></span>
+    cache.append((v, question, f&quot;answer #{llm_calls}&quot;))
+    print(f&quot;MISS {score:.2f} {question!r} -> called the LLM&quot;)
+
+for q in [&quot;How do I get a refund?&quot;, &quot;How can I get my money back?&quot;, &quot;When will my order arrive?&quot;,
+          &quot;Cancel my subscription&quot;, &quot;Do not cancel my subscription&quot;]:
+    ask(q)
+print(&quot;the last hit is WRONG: same words, opposite meaning - test thresholds on real traffic&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">MISS 0.00 'How do I get a refund?' -> called the LLM
+HIT  1.00 'How can I get my money back?' -> reuse the answer to 'How do I get a refund?'
+MISS 0.00 'When will my order arrive?' -> called the LLM
+MISS 0.00 'Cancel my subscription' -> called the LLM
+HIT  1.00 'Do not cancel my subscription' -> reuse the answer to 'Cancel my subscription'
+the last hit is WRONG: same words, opposite meaning - test thresholds on real traffic</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Log the best similarity score for every lookup, hit or miss; plot them to pick a threshold instead of guessing.</li><li>Review a sample of cache hits by hand: look for near-miss pairs with opposite meaning (&quot;cancel&quot; vs &quot;do not cancel&quot;).</li><li>Libraries such as GPTCache and Redis-based semantic caches (also integrated in LangChain) expose the threshold and the stored question for each hit.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="llm-gateway.html">

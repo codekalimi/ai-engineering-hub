@@ -26,6 +26,7 @@
         <span class="eyebrow">LangChain &amp; LangGraph · 6 of 7</span>
         <h1>How does streaming reach the browser (SSE)?</h1>
         <p class="tldr"><span class="label">In one line</span>The server calls the model in streaming mode and forwards each chunk to the browser as a Server-Sent Event, so text appears as it's generated.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-streaming">
@@ -73,6 +74,46 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Server-Sent Events: the raw HTTP response body is plain text, one &quot;data:&quot; line per event.</span>
+import json
+
+def fake_model_stream(prompt):
+    <span class="c"># <b>Step 2</b>: the model is called with streaming on and yields tokens as it produces them</span>
+    yield from [&quot;Stream&quot;, &quot;ing &quot;, &quot;shows &quot;, &quot;tokens &quot;, &quot;early.&quot;]
+
+def sse_endpoint(prompt):
+    <span class="c"># Response header: Content-Type: text/event-stream</span>
+    full = []
+    for chunk in fake_model_stream(prompt):
+        full.append(chunk)
+        <span class="c"># <b>Step 3</b>: forward each chunk immediately; a blank line ends each event</span>
+        yield f&quot;data: {json.dumps({'delta': chunk})}\n\n&quot;
+    <span class="c"># <b>Step 5</b>: log the full answer and usage, then send a final 'done' event</span>
+    yield f&quot;event: done\ndata: {json.dumps({'chars': len(''.join(full))})}\n\n&quot;
+
+<span class="c"># <b>Step 1</b>: the browser keeps the connection open (EventSource or fetch with a stream reader)</span>
+ui = &quot;&quot;
+for n, raw in enumerate(sse_endpoint(&quot;hi&quot;), 1):
+    print(f&quot;event {n} on the wire: {raw!r}&quot;)
+    <span class="c"># <b>Step 4</b>: the browser parses each event and appends the text to the UI</span>
+    for line in raw.splitlines():
+        if line.startswith(&quot;data:&quot;) and &quot;delta&quot; in line:
+            ui += json.loads(line[len(&quot;data:&quot;):])[&quot;delta&quot;]
+print(&quot;UI now shows:&quot;, ui)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">event 1 on the wire: 'data: {&quot;delta&quot;: &quot;Stream&quot;}\n\n'
+event 2 on the wire: 'data: {&quot;delta&quot;: &quot;ing &quot;}\n\n'
+event 3 on the wire: 'data: {&quot;delta&quot;: &quot;shows &quot;}\n\n'
+event 4 on the wire: 'data: {&quot;delta&quot;: &quot;tokens &quot;}\n\n'
+event 5 on the wire: 'data: {&quot;delta&quot;: &quot;early.&quot;}\n\n'
+event 6 on the wire: 'event: done\ndata: {&quot;chars&quot;: 29}\n\n'
+UI now shows: Streaming shows tokens early.</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li><code>curl -N http://localhost:8000/chat/stream</code> (the <code>-N</code> turns off buffering) prints the raw <code>data:</code> lines as they arrive.</li><li>Browser DevTools, Network tab: click the request and open the EventStream tab to see each event with its arrival time.</li><li>LangChain: <code>async for ev in chain.astream_events(inputs, version=&quot;v2&quot;): print(ev[&quot;event&quot;], ev[&quot;name&quot;])</code> shows every token event before you forward it.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="checkpointers.html">

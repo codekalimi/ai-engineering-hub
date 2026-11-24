@@ -26,6 +26,7 @@
         <span class="eyebrow">Tools &amp; agents · 5 of 7</span>
         <h1>How does agent memory work (short-term vs long-term)?</h1>
         <p class="tldr"><span class="label">In one line</span>Short-term memory is the current conversation's state, saved per thread. Long-term memory is facts saved across conversations, searched and added to the prompt when relevant.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-agent-memory">
@@ -60,6 +61,50 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import json, re
+words = lambda t: set(re.findall(r&quot;[a-z]+&quot;, t.lower()))
+
+threads = {}   <span class="c"># short-term: each conversation's messages, saved per thread (a checkpointer does this)</span>
+store = {}     <span class="c"># long-term: durable facts per user, searchable across conversations (a store does this)</span>
+
+def save_memory(user, fact):
+    <span class="c"># <b>Step 3</b>: written by the agent through a &quot;save memory&quot; tool (or by a background job)</span>
+    store.setdefault(user, []).append(fact)
+
+def search_memory(user, query):
+    <span class="c"># <b>Step 4</b>: in a later conversation, find relevant memories (real stores use embeddings)</span>
+    return [f for f in store.get(user, []) if words(f) &amp; words(query)]
+
+def chat(user, thread, message):
+    history = threads.setdefault(thread, [])        <span class="c"># <b>Step 1</b>: load this thread's history</span>
+    memories = search_memory(user, message)         <span class="c"># <b>Step 2</b>/4: plus relevant long-term facts</span>
+    print(f&quot;[{thread}] {message!r}&quot;)
+    print(f&quot;   prompt = {len(history)} earlier messages + memories {memories}&quot;)
+    history += [(&quot;user&quot;, message), (&quot;assistant&quot;, &quot;...&quot;)]
+    if &quot;I'm vegetarian&quot; in message:
+        save_memory(user, &quot;User is vegetarian&quot;)
+    if &quot;aisle&quot; in message:
+        save_memory(user, &quot;User prefers an aisle seat on flights&quot;)
+
+chat(&quot;user-42&quot;, &quot;thread-1&quot;, &quot;I'm vegetarian, plan a dinner for Friday&quot;)
+chat(&quot;user-42&quot;, &quot;thread-1&quot;, &quot;Also I like an aisle seat when I fly&quot;)
+<span class="c"># A brand-new conversation: no history, but the long-term memory comes back</span>
+chat(&quot;user-42&quot;, &quot;thread-2&quot;, &quot;Find a vegetarian place near my hotel&quot;)
+print(&quot;long-term store:&quot;, json.dumps(store))
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">[thread-1] &quot;I'm vegetarian, plan a dinner for Friday&quot;
+   prompt = 0 earlier messages + memories []
+[thread-1] 'Also I like an aisle seat when I fly'
+   prompt = 2 earlier messages + memories []
+[thread-2] 'Find a vegetarian place near my hotel'
+   prompt = 0 earlier messages + memories ['User is vegetarian']
+long-term store: {&quot;user-42&quot;: [&quot;User is vegetarian&quot;, &quot;User prefers an aisle seat on flights&quot;]}</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>LangGraph short-term memory: <code>graph.get_state({&quot;configurable&quot;: {&quot;thread_id&quot;: &quot;t1&quot;}}).values[&quot;messages&quot;]</code> shows exactly what the next turn will see.</li><li>LangGraph long-term memory: <code>store.search((&quot;memories&quot;, user_id), query=&quot;food preferences&quot;)</code> returns stored items with similarity scores; print them before they go into the prompt.</li><li>Print the final prompt of a new conversation to check that the right memories (and only those) were injected.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="multi-agent-supervisor.html">

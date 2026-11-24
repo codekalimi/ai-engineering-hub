@@ -26,6 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 8 of 9</span>
         <h1>How does parent-document (small-to-big) retrieval work?</h1>
         <p class="tldr"><span class="label">In one line</span>Search over small, precise chunks, but hand the model the larger section they came from, so you get precise matching and enough context.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-parent-doc">
@@ -60,6 +61,36 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import re
+words = lambda t: set(re.findall(r&quot;[a-z0-9]+&quot;, t.lower()))
+
+<span class="c"># <b>Step 1</b>: split each document twice - big parent sections, small child chunks that point to a parent</span>
+parents = {
+    &quot;P1&quot;: &quot;Refunds. Customers can request a refund within 30 days. Refunds go back to the original &quot;
+          &quot;payment method. Digital downloads are refundable only if not yet downloaded.&quot;,
+    &quot;P2&quot;: &quot;Shipping. Orders ship within 2 business days. Express shipping costs extra. &quot;
+          &quot;International orders may take up to 3 weeks.&quot;,
+}
+children = [{&quot;text&quot;: s, &quot;parent&quot;: pid} for pid, text in parents.items() for s in text.split(&quot;. &quot;)]
+print(f&quot;{len(parents)} parents -> {len(children)} child chunks&quot;)
+
+<span class="c"># <b>Step 2</b>: only the small chunks are searched, so matching is precise</span>
+question = &quot;Can I get a refund for an e-book I already downloaded?&quot;
+best = max(children, key=lambda c: len(words(question) &amp; words(c[&quot;text&quot;])))
+print(&quot;best child chunk:&quot;, repr(best[&quot;text&quot;]), &quot;-> parent&quot;, best[&quot;parent&quot;])
+
+<span class="c"># <b>Step 3-4</b>: return the parent section instead: it holds the rule the child chunk is missing</span>
+print(&quot;context sent to the LLM:&quot;, parents[best[&quot;parent&quot;]])
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">2 parents -> 8 child chunks
+best child chunk: 'Customers can request a refund within 30 days' -> parent P1
+context sent to the LLM: Refunds. Customers can request a refund within 30 days. Refunds go back to the original payment method. Digital downloads are refundable only if not yet downloaded.</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>LangChain: <code>ParentDocumentRetriever</code> (child splitter + parent splitter + a docstore); print the child hits and the parent ids they map to.</li><li>A simple DIY version: store <code>parent_id</code> in each chunk’s metadata, search chunks, then fetch parents by id and de-duplicate.</li><li>Compare answers using only the matched chunk vs the full parent for questions whose answer spans several sentences.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="conversational-rag.html">

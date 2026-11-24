@@ -26,6 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 3 of 9</span>
         <h1>How does RAG work end to end?</h1>
         <p class="tldr"><span class="label">In one line</span>Documents are split, embedded and stored ahead of time. For each question, the most relevant chunks are retrieved and put into the prompt, so the model answers from them.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-rag">
@@ -60,6 +61,56 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A whole RAG pipeline in miniature. Retrieval is word overlap instead of embeddings and the</span>
+<span class="c"># &quot;LLM&quot; is a stub, so you can see exactly what gets built and passed along.</span>
+import re
+
+DOCS = {
+    &quot;hr-policy.md&quot;: &quot;Employees get 24 days of paid leave per year. Unused leave carries over up to 5 days.&quot;,
+    &quot;it-policy.md&quot;: &quot;Laptops are replaced every 3 years. Report lost devices to IT within 24 hours.&quot;,
+    &quot;travel.md&quot;: &quot;Book flights through the travel portal. Economy class for flights under 6 hours.&quot;,
+}
+def words(t): return set(re.findall(r&quot;[a-z0-9]+&quot;, t.lower()))
+
+<span class="c"># <b>Step 1 (indexing, ahead of time)</b>: split into chunks and index them</span>
+chunks = [(src, s.strip()) for src, text in DOCS.items() for s in text.split(&quot;. &quot;) if s.strip()]
+index = [(src, text, words(text)) for src, text in chunks]
+print(f&quot;indexed {len(index)} chunks&quot;)
+
+<span class="c"># <b>Step 2</b>: a chat follow-up would be rewritten into a standalone question here</span>
+question = &quot;How many days of paid leave do I get?&quot;
+<span class="c"># <b>Step 3</b>: retrieval - score every chunk</span>
+q = words(question)
+scored = sorted(((len(q &amp; w), src, text) for src, text, w in index), reverse=True)
+<span class="c"># <b>Step 4</b>: &quot;rerank&quot; - keep the best 2 that match at all</span>
+top = [(src, text) for score, src, text in scored[:2] if score > 0]
+<span class="c"># <b>Step 5</b>: build the prompt: numbered, labelled context plus the instruction</span>
+context = &quot;\n&quot;.join(f&quot;[{i + 1}] ({src}) {text}&quot; for i, (src, text) in enumerate(top))
+prompt = f&quot;Answer only from the context. Cite like [1].\n\nContext:\n{context}\n\nQuestion: {question}&quot;
+print(&quot;---- prompt sent to the LLM ----\n&quot; + prompt + &quot;\n--------------------------------&quot;)
+
+<span class="c"># <b>Step 6</b>: the LLM answers from the context with a citation (stubbed)</span>
+def fake_llm(prompt):
+    return context.splitlines()[0].split(&quot;) &quot;, 1)[1] + &quot; [1]&quot;
+print(&quot;answer:&quot;, fake_llm(prompt))
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">indexed 6 chunks
+---- prompt sent to the LLM ----
+Answer only from the context. Cite like [1].
+
+Context:
+[1] (hr-policy.md) Employees get 24 days of paid leave per year
+[2] (hr-policy.md) Unused leave carries over up to 5 days.
+
+Question: How many days of paid leave do I get?
+--------------------------------
+answer: Employees get 24 days of paid leave per year [1]</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>LangChain: <code>from langchain_core.globals import set_debug; set_debug(True)</code> prints every step’s input and output, including the final prompt with the retrieved chunks.</li><li>LangSmith: set <code>LANGSMITH_TRACING=true</code> and <code>LANGSMITH_API_KEY</code>; each run shows the retriever’s documents and the exact prompt sent to the model.</li><li>Always print the retrieved chunks next to the answer while developing: most bad answers are bad retrieval.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="hnsw-vector-search.html">

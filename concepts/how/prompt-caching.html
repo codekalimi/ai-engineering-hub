@@ -26,6 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 7 of 10</span>
         <h1>How does prompt caching work?</h1>
         <p class="tldr"><span class="label">In one line</span>When requests start with the same long prefix, the provider keeps the computed KV cache for that prefix, so later requests skip that work and cost less.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-prompt-caching">
@@ -60,6 +61,39 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A provider-side prefix cache: the KV cache for a prompt prefix is kept, keyed by its exact tokens.</span>
+import hashlib
+cache = {}
+
+def request(prompt, prefix_tokens):
+    toks = prompt.split()
+    prefix = toks[:prefix_tokens]
+    key = hashlib.sha256(&quot; &quot;.join(prefix).encode()).hexdigest()[:10]
+    if key in cache:
+        <span class="c"># <b>Step 3-4</b>: same prefix -> reuse its KV cache; only the new part is processed</span>
+        processed, reused = len(toks) - len(prefix), len(prefix)
+    else:
+        <span class="c"># <b>Step 1-2</b>: compute the KV cache for the whole prompt, keep the prefix part for a while</span>
+        cache[key] = &quot;KV tensors for the prefix&quot;
+        processed, reused = len(toks), 0
+    print(f&quot;{'HIT ' if reused else 'MISS'} key {key}: processed {processed:4} tokens, reused {reused}&quot;)
+
+SYSTEM = &quot;You are a support bot. &quot; + &quot;policy &quot; * 2000     <span class="c"># a long, unchanging prefix</span>
+n = len(SYSTEM.split())
+request(SYSTEM + &quot;Question: where is my order?&quot;, n)
+request(SYSTEM + &quot;Question: how do refunds work?&quot;, n)
+<span class="c"># change ONE early token and the prefix no longer matches</span>
+request(&quot;You are a SUPPORT bot. &quot; + &quot;policy &quot; * 2000 + &quot;Question: hi&quot;, n)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">MISS key a41a024f8a: processed 2010 tokens, reused 0
+HIT  key a41a024f8a: processed    5 tokens, reused 2005
+MISS key 3b83cc0d6c: processed 2007 tokens, reused 0</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Anthropic: mark the stable prefix with <code>cache_control</code>; the response’s <code>usage</code> shows <code>cache_creation_input_tokens</code> on the first call and <code>cache_read_input_tokens</code> on later ones.</li><li>OpenAI-style APIs report cached tokens in <code>usage.prompt_tokens_details.cached_tokens</code> (automatic above a minimum prompt length).</li><li>Change one character near the start of the prompt (a timestamp, a user name) and watch the cache hits drop to zero: keep the variable parts at the end.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="tensor-parallelism.html">

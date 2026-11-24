@@ -26,6 +26,7 @@
         <span class="eyebrow">Inside the LLM · 3 of 8</span>
         <h1>How does attention work?</h1>
         <p class="tldr"><span class="label">In one line</span>Each token makes a query, a key and a value. It compares its query with earlier tokens' keys to decide how much to pay attention to each, then takes a weighted mix of their values.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-attention">
@@ -64,6 +65,42 @@ def attention(Q, K, V):
     w = w / w.sum(axis=-1, keepdims=True)              # softmax
     return w @ V</pre>
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Single-head causal attention over 3 tokens, written out by hand.</span>
+import math
+
+tokens = [&quot;The&quot;, &quot;cat&quot;, &quot;sat&quot;]
+<span class="c"># <b>Step 1</b>: each token has a query, key and value vector (normally token vector x learned matrices)</span>
+Q = [[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+K = [[1.0, 0.0], [0.2, 1.0], [0.9, 0.8]]
+V = [[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]]
+d = len(Q[0])
+
+def softmax(xs):
+    m = max(xs)
+    e = [math.exp(x - m) for x in xs]
+    return [x / sum(e) for x in e]
+
+for i, tok in enumerate(tokens):
+    <span class="c"># <b>Step 2</b>: score = query . key / sqrt(d)</span>
+    <span class="c"># <b>Step 3</b>: causal mask - only tokens at or before position i are scored</span>
+    scores = [sum(q * k for q, k in zip(Q[i], K[j])) / math.sqrt(d) for j in range(i + 1)]
+    <span class="c"># <b>Step 4</b>: softmax turns the scores into weights that add up to 1</span>
+    w = softmax(scores)
+    <span class="c"># <b>Step 5</b>: the output is the weighted mix of the value vectors</span>
+    out = [sum(w[j] * V[j][c] for j in range(i + 1)) for c in range(d)]
+    looks = &quot;, &quot;.join(f&quot;{tokens[j]} {w[j]:.2f}&quot; for j in range(i + 1))
+    print(f&quot;{tok:>4} attends to [{looks}] -> output {[round(x, 2) for x in out]}&quot;)
+<span class="c"># <b>Step 6</b>: multi-head attention = this, several times in parallel with different Q/K/V matrices</span>
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out"> The attends to [The 1.00] -> output [1.0, 0.0]
+ cat attends to [The 0.33, cat 0.67] -> output [0.33, 0.67]
+ sat attends to [The 0.26, cat 0.30, sat 0.43] -> output [0.48, 0.52]</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Hugging Face: load the model with <code>attn_implementation=&quot;eager&quot;</code>, call <code>model(**inputs, output_attentions=True)</code> and read <code>.attentions</code>: one tensor per layer, shaped [batch, heads, tokens, tokens].</li><li>Visualize it with the <code>bertviz</code> package (<code>head_view(attentions, tokens)</code>) to see which words each head looks at.</li><li>Read a minimal implementation such as Karpathy’s nanoGPT <code>model.py</code> (CausalSelfAttention): about 30 lines, the same maths as below.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="tokenization.html">

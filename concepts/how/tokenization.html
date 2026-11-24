@@ -26,6 +26,7 @@
         <span class="eyebrow">Inside the LLM · 2 of 8</span>
         <h1>How does tokenization (BPE) work?</h1>
         <p class="tldr"><span class="label">In one line</span>Byte-pair encoding builds a vocabulary of frequent character sequences. Text is split into the longest known pieces, so common words are one token and rare words become several.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-tokenize">
@@ -60,6 +61,69 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Train a tiny BPE tokenizer, then use it.</span>
+from collections import Counter
+
+corpus = &quot;low lower lowest newer newest wider widest&quot;
+<span class="c"># <b>Step 1</b>: start from single characters (real BPE starts from bytes). &quot;_&quot; marks the end of a word.</span>
+words = Counter(tuple(w) + (&quot;_&quot;,) for w in corpus.split())
+
+def pair_counts(words):
+    counts = Counter()
+    for word, freq in words.items():
+        for a, b in zip(word, word[1:]):
+            counts[a, b] += freq
+    return counts
+
+def merge(word, pair):
+    out, i = [], 0
+    while i &lt; len(word):
+        if i &lt; len(word) - 1 and (word[i], word[i + 1]) == pair:
+            out.append(word[i] + word[i + 1])
+            i += 2
+        else:
+            out.append(word[i])
+            i += 1
+    return tuple(out)
+
+<span class="c"># <b>Step 2</b>: repeatedly merge the most frequent adjacent pair into a new token</span>
+merges = []
+for _ in range(8):
+    best, n = pair_counts(words).most_common(1)[0]
+    merges.append(best)
+    words = Counter({merge(w, best): f for w, f in words.items()})
+    print(f&quot;merge {best[0]!r} + {best[1]!r} (seen {n}x)&quot;)
+
+<span class="c"># <b>Step 3</b>: tokenize new text by replaying the merges in order; each piece gets an ID</span>
+def tokenize(word):
+    parts = tuple(word) + (&quot;_&quot;,)
+    for pair in merges:
+        parts = merge(parts, pair)
+    return list(parts)
+
+vocab = {}
+for w in [&quot;lowest&quot;, &quot;newest&quot;, &quot;slower&quot;]:
+    pieces = tokenize(w)
+    ids = [vocab.setdefault(p, len(vocab)) for p in pieces]
+    print(f&quot;{w!r:10} -> {pieces} -> ids {ids}&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">merge 'w' + 'e' (seen 4x)
+merge 'l' + 'o' (seen 3x)
+merge 'r' + '_' (seen 3x)
+merge 's' + 't' (seen 3x)
+merge 'st' + '_' (seen 3x)
+merge 'lo' + 'we' (seen 2x)
+merge 'n' + 'e' (seen 2x)
+merge 'ne' + 'we' (seen 2x)
+'lowest'   -> ['lowe', 'st_'] -> ids [0, 1]
+'newest'   -> ['newe', 'st_'] -> ids [2, 1]
+'slower'   -> ['s', 'lowe', 'r_'] -> ids [3, 0, 4]</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>OpenAI tokenizers: <code>import tiktoken; enc = tiktoken.get_encoding(&quot;o200k_base&quot;); ids = enc.encode(&quot;unbelievable&quot;)</code>, then <code>[enc.decode([i]) for i in ids]</code> shows each piece.</li><li>Hugging Face: <code>AutoTokenizer.from_pretrained(name).tokenize(&quot;unbelievable&quot;)</code> shows the pieces; <code>.encode(...)</code> shows the IDs.</li><li>Compare the same sentence across two tokenizers (and in another language, or code) to see why token counts and costs differ.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="text-generation.html">

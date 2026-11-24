@@ -26,6 +26,7 @@
         <span class="eyebrow">Training &amp; fine-tuning · 4 of 5</span>
         <h1>How does distillation work?</h1>
         <p class="tldr"><span class="label">In one line</span>A large &quot;teacher&quot; model generates high-quality outputs, and a smaller &quot;student&quot; model is fine-tuned on them, inheriting much of the teacher's ability on that task at a fraction of the cost.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-distillation">
@@ -56,6 +57,48 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># <b>Step 1</b>: realistic prompts for the task (classifying support tickets)</span>
+prompts = [&quot;refund not received&quot;, &quot;app crashes on login&quot;, &quot;charged twice&quot;, &quot;cannot reset password&quot;,
+           &quot;invoice missing&quot;, &quot;screen freezes&quot;, &quot;card declined&quot;, &quot;login code never arrives&quot;]
+
+def teacher(p):
+    <span class="c"># <b>Step 2</b>: the big, expensive model labels them (stubbed)</span>
+    return &quot;billing&quot; if any(w in p for w in [&quot;refund&quot;, &quot;charged&quot;, &quot;invoice&quot;, &quot;card&quot;]) else &quot;technical&quot;
+
+data = [(p, teacher(p)) for p in prompts]
+data = [(p, y) for p, y in data if y in {&quot;billing&quot;, &quot;technical&quot;}]     <span class="c"># <b>Step 3</b>: quality filter</span>
+
+<span class="c"># <b>Step 4</b>: &quot;fine-tune&quot; a tiny student: learn which words point to which label</span>
+weights = {}
+for p, y in data:
+    for w in p.split():
+        weights.setdefault(w, {&quot;billing&quot;: 0, &quot;technical&quot;: 0})[y] += 1
+
+def student(p):
+    votes = {&quot;billing&quot;: 0, &quot;technical&quot;: 0}
+    for w in p.split():
+        for label, n in weights.get(w, {}).items():
+            votes[label] += n
+    return max(votes, key=votes.get)
+
+<span class="c"># <b>Step 5</b>: compare the student with the teacher on NEW examples</span>
+test = [&quot;refund still pending&quot;, &quot;crashes after update&quot;, &quot;charged for a cancelled plan&quot;, &quot;password email not arriving&quot;]
+for p in test:
+    print(f&quot;{p!r:32} teacher={teacher(p):9} student={student(p)}&quot;)
+agree = sum(student(p) == teacher(p) for p in test)
+print(f&quot;student agrees with the teacher on {agree}/{len(test)} - at a fraction of the cost per request&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">'refund still pending'           teacher=billing   student=billing
+'crashes after update'           teacher=technical student=technical
+'charged for a cancelled plan'   teacher=billing   student=billing
+'password email not arriving'    teacher=technical student=billing
+student agrees with the teacher on 3/4 - at a fraction of the cost per request</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Keep the teacher’s outputs as a dataset (JSONL of prompt and response) and read a sample by hand before training: the student copies mistakes too.</li><li>Evaluate teacher and student on the same held-out set and report both quality and cost/latency per request: that ratio is the business case.</li><li>Check the teacher provider’s terms: some forbid using outputs to train competing models.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="rlhf-dpo.html">

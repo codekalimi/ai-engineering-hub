@@ -26,6 +26,7 @@
         <span class="eyebrow">Inside the LLM · 8 of 8</span>
         <h1>How does structured output (JSON mode, constrained decoding) work?</h1>
         <p class="tldr"><span class="label">In one line</span>Either the model is trained to emit schema-shaped JSON (as in tool calling), or the server restricts which tokens may be chosen at each step so the output must match your schema.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-structured">
@@ -56,6 +57,46 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Constrained generation masks out every token the schema does not allow, before each pick.</span>
+import json, random
+random.seed(0)
+
+VOCAB = ['{', '}', '&quot;sentiment&quot;', ':', '&quot;pos&quot;', '&quot;neg&quot;', 'Sure!', 'Here', ',']
+<span class="c"># <b>Step 1</b>: the schema {&quot;sentiment&quot;: &quot;pos&quot; | &quot;neg&quot;} becomes a grammar: what may come at each position</span>
+GRAMMAR = [['{'], ['&quot;sentiment&quot;'], [':'], ['&quot;pos&quot;', '&quot;neg&quot;'], ['}']]
+
+def model_scores(so_far):
+    <span class="c"># the unconstrained model would love to chat first</span>
+    return {t: (5.0 if t in ('Sure!', 'Here') else random.uniform(0, 2)) for t in VOCAB}
+
+out = []
+while len(out) &lt; len(GRAMMAR):
+    <span class="c"># <b>Step 2</b>: work out which tokens could legally come next</span>
+    legal = GRAMMAR[len(out)]
+    scores = model_scores(out)
+    wanted = max(scores, key=scores.get)
+    <span class="c"># <b>Step 3</b>: every other token gets probability zero (score -inf) before picking</span>
+    masked = {t: (s if t in legal else float(&quot;-inf&quot;)) for t, s in scores.items()}
+    pick = max(masked, key=masked.get)
+    print(f&quot;model wanted {wanted:12} allowed {legal} -> {pick}&quot;)
+    out.append(pick)
+
+<span class="c"># <b>Step 4</b>: guaranteed to parse</span>
+text = &quot;&quot;.join(out)
+print(&quot;output:&quot;, text, &quot;->&quot;, json.loads(text))
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">model wanted Sure!        allowed ['{'] -> {
+model wanted Sure!        allowed ['&quot;sentiment&quot;'] -> &quot;sentiment&quot;
+model wanted Sure!        allowed [':'] -> :
+model wanted Sure!        allowed ['&quot;pos&quot;', '&quot;neg&quot;'] -> &quot;neg&quot;
+model wanted Sure!        allowed ['}'] -> }
+output: {&quot;sentiment&quot;:&quot;neg&quot;} -> {'sentiment': 'neg'}</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>LangChain: <code>model.with_structured_output(MySchema, include_raw=True)</code> returns the raw message, the parsed object and any parsing error, so you see what came back.</li><li>Print <code>MySchema.model_json_schema()</code> (Pydantic) to see the JSON Schema that is sent to the API.</li><li>Self-hosted: vLLM and llama.cpp support grammar/JSON-schema guided decoding; compare output with and without it on a small model.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="reasoning-models.html">

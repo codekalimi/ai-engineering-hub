@@ -26,6 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 5 of 9</span>
         <h1>How does reranking work (bi-encoder vs cross-encoder)?</h1>
         <p class="tldr"><span class="label">In one line</span>Retrieval embeds the query and documents separately: fast but coarse. A reranker reads the query and each candidate together: slower but much more accurate, so it only runs on a short list.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-rerank">
@@ -64,6 +65,52 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import re
+words = lambda t: re.findall(r&quot;[a-z]+&quot;, t.lower())
+
+query = &quot;flights from Delhi to Mumbai&quot;
+candidates = [
+    &quot;Flights from Mumbai to Delhi every morning&quot;,
+    &quot;Mumbai and Delhi hotel deals&quot;,
+    &quot;Delhi to Mumbai flights depart every hour&quot;,
+]
+
+<span class="c"># <b>Step 1</b>: bi-encoder - each text becomes a vector ON ITS OWN (here: a set of words), ahead of time</span>
+def embed(text): return set(words(text))
+def bi_score(q, d): return len(q &amp; d) / len(q | d)
+doc_vectors = [embed(d) for d in candidates]
+q_vec = embed(query)
+print(&quot;bi-encoder (fast, but query and document never meet):&quot;)
+for d, v in sorted(zip(candidates, doc_vectors), key=lambda x: -bi_score(q_vec, x[1])):
+    print(f&quot;  {bi_score(q_vec, v):.2f}  {d}&quot;)
+
+<span class="c"># <b>Step 2-3</b>: cross-encoder - reads the query and document TOGETHER, so it can see that</span>
+<span class="c"># the direction of travel matters. (A real one is a transformer that outputs a score.)</span>
+def cross_score(q, d):
+    qw, dw = words(q), words(d)
+    overlap = len(set(qw) &amp; set(dw)) / len(set(qw))
+    right_direction = {&quot;delhi&quot;, &quot;mumbai&quot;} &lt;= set(dw) and dw.index(&quot;delhi&quot;) &lt; dw.index(&quot;mumbai&quot;)
+    return round(0.4 * overlap + 0.4 * right_direction + 0.2 * (&quot;flights&quot; in dw), 2)
+
+<span class="c"># <b>Step 4</b>: run it only on the top candidates - one model call per pair</span>
+print(&quot;cross-encoder rerank:&quot;)
+for d in sorted(candidates, key=lambda d: -cross_score(query, d)):
+    print(f&quot;  {cross_score(query, d):.2f}  {d}&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">bi-encoder (fast, but query and document never meet):
+  0.71  Flights from Mumbai to Delhi every morning
+  0.50  Delhi to Mumbai flights depart every hour
+  0.25  Mumbai and Delhi hotel deals
+cross-encoder rerank:
+  0.92  Delhi to Mumbai flights depart every hour
+  0.60  Flights from Mumbai to Delhi every morning
+  0.16  Mumbai and Delhi hotel deals</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>sentence-transformers: <code>CrossEncoder(&quot;cross-encoder/ms-marco-MiniLM-L-6-v2&quot;).predict([(query, doc) for doc in candidates])</code> returns one relevance score per pair.</li><li>Hosted rerankers (Cohere, Voyage, Jina and others) take a query plus a list of documents and return them re-sorted with scores; log the order before and after.</li><li>Measure it: recall@5 or MRR on a small labelled set, with and without the reranker.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="hybrid-search-rrf.html">

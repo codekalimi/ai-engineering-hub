@@ -26,6 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 5 of 10</span>
         <h1>How does speculative decoding work?</h1>
         <p class="tldr"><span class="label">In one line</span>A small, fast model drafts several tokens ahead; the large model checks all of them in one pass and keeps the ones it agrees with, giving several tokens for the price of one big step.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-spec-decoding">
@@ -56,6 +57,50 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import random
+random.seed(5)
+TARGET = &quot;the quick brown fox jumps over the lazy dog&quot;.split()
+
+def big_model(prefix):
+    <span class="c"># the slow, accurate model (here it always knows the right next word)</span>
+    return TARGET[len(prefix)] if len(prefix) &lt; len(TARGET) else None
+
+def draft_model(prefix, k):
+    <span class="c"># <b>Step 1</b>: a small, fast model guesses the next k tokens; sometimes it is wrong</span>
+    return [TARGET[p] if random.random() &lt; 0.75 else &quot;cat&quot;
+            for p in range(len(prefix), min(len(prefix) + k, len(TARGET)))]
+
+out, big_passes = [], 0
+while len(out) &lt; len(TARGET):
+    draft = draft_model(out, k=4)
+    big_passes += 1                      <span class="c"># <b>Step 2</b>: ONE big-model pass checks every draft token</span>
+    accepted = []
+    for tok in draft:
+        want = big_model(out + accepted)
+        if tok == want:
+            accepted.append(tok)         <span class="c"># <b>Step 3</b>: accept up to the first disagreement</span>
+        else:
+            accepted.append(want)        <span class="c"># <b>Step 4</b>: use the big model's own token there, then redraft</span>
+            break
+    else:
+        bonus = big_model(out + accepted)  <span class="c"># all accepted: the same pass yields one extra token</span>
+        if bonus:
+            accepted.append(bonus)
+    print(f&quot;pass {big_passes}: draft {draft} -> keep {accepted}&quot;)
+    out += accepted
+print(f&quot;{len(out)} tokens in {big_passes} big-model passes (normal decoding needs {len(TARGET)})&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">pass 1: draft ['the', 'quick', 'cat', 'cat'] -> keep ['the', 'quick', 'brown']
+pass 2: draft ['fox', 'cat', 'over', 'the'] -> keep ['fox', 'jumps']
+pass 3: draft ['cat', 'the', 'cat', 'dog'] -> keep ['over']
+pass 4: draft ['the', 'lazy', 'dog'] -> keep ['the', 'lazy', 'dog']
+9 tokens in 4 big-model passes (normal decoding needs 9)</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>vLLM: configure a draft model or n-gram/EAGLE speculation (see the speculative decoding docs for your version) and compare tokens/second on the same prompts.</li><li>Watch the acceptance rate in its metrics/logs: high for predictable text (code, JSON, repeated content), low for creative writing.</li><li>Hugging Face: <code>model.generate(..., assistant_model=small_model)</code> enables assisted generation, the same idea.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="quantization.html">

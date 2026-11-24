@@ -26,6 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 2 of 9</span>
         <h1>How does a vector database find nearest neighbours fast (HNSW)?</h1>
         <p class="tldr"><span class="label">In one line</span>Instead of comparing the query with every vector, it walks a layered graph of neighbour links: long jumps on sparse upper layers, then finer steps on denser lower layers.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-hnsw">
@@ -56,6 +57,63 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A small HNSW-style search: a sparse top layer for long jumps, a dense bottom layer for precision.</span>
+import math, random
+random.seed(7)
+
+points = [(random.uniform(0, 100), random.uniform(0, 100)) for _ in range(400)]
+query = (73.0, 21.0)
+
+<span class="c"># <b>Step 1 (insert)</b>: link every point to its nearest neighbours; a few points are also promoted</span>
+<span class="c"># to an upper layer. (Real HNSW builds this incrementally as vectors arrive.)</span>
+def link(ids, m):
+    return {i: sorted((j for j in ids if j != i), key=lambda j: math.dist(points[i], points[j]))[:m] for i in ids}
+bottom_ids = list(range(len(points)))
+top_ids = bottom_ids[::20]                     <span class="c"># ~5% of the points</span>
+layers = [link(top_ids, 4), link(bottom_ids, 8)]
+
+memo = {}                                      <span class="c"># count how many distances we compute</span>
+def d(i):
+    if i not in memo:
+        memo[i] = math.dist(points[i], query)
+    return memo[i]
+
+<span class="c"># <b>Steps 2-3</b>: greedy walk on the top layer, then drop down and continue from there</span>
+cur = top_ids[0]
+for name, graph in zip([&quot;top&quot;, &quot;bottom&quot;], layers):
+    improved = True
+    while improved:
+        improved = False
+        for n in graph[cur]:
+            if d(n) &lt; d(cur):
+                cur, improved = n, True
+    print(f&quot;{name:6} layer: closest so far = point {cur} at distance {d(cur):.1f}&quot;)
+
+<span class="c"># <b>Step 4</b>: on the bottom layer, explore a candidate list of size ef and keep the best k</span>
+ef, k = 16, 3
+cands, seen, frontier = [cur], {cur}, [cur]
+while frontier:
+    for n in layers[1][frontier.pop()]:
+        if n not in seen:
+            seen.add(n)
+            cands = sorted(cands + [n], key=d)[:ef]
+            if n in cands:
+                frontier.append(n)
+
+exact = sorted(bottom_ids, key=lambda i: math.dist(points[i], query))[:k]
+print(&quot;HNSW top-3: &quot;, sorted(cands, key=d)[:k], f&quot;({len(memo)} distance checks)&quot;)
+print(&quot;exact top-3:&quot;, exact, f&quot;({len(points)} distance checks)&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">top    layer: closest so far = point 160 at distance 29.0
+bottom layer: closest so far = point 243 at distance 0.5
+HNSW top-3:  [243, 107, 241] (63 distance checks)
+exact top-3: [243, 107, 241] (400 distance checks)</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>FAISS: <code>index = faiss.IndexHNSWFlat(dim, 32)</code>; change <code>index.hnsw.efSearch</code> and measure recall against <code>IndexFlatL2</code> (exact search) and query time.</li><li>pgvector: <code>CREATE INDEX ON items USING hnsw (embedding vector_cosine_ops)</code>, then <code>EXPLAIN ANALYZE</code> your query to confirm the index is used; tune <code>SET hnsw.ef_search = 100</code>.</li><li>hnswlib: <code>p.set_ef(k)</code>; plot recall vs latency as ef grows to see the trade-off.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="embeddings.html">

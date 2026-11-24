@@ -15,10 +15,13 @@ const esc = R.esc;
 // Load the browser data files the same way the cheat sheet does
 const ctx = { window: {} };
 vm.createContext(ctx);
-for (const f of ["how-it-works-data.js", "how-it-works-data-2.js", "how-meta.js"]) {
+const DATA_FILES = ["how-it-works-data.js", "how-it-works-data-2.js", "how-meta.js",
+  "how-internals-1.js", "how-internals-2.js", "how-internals-3.js", "how-internals-output.js"];
+for (const f of DATA_FILES) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, f), "utf8"), ctx, { filename: f });
 }
 const { HOW, HOW_META: META } = ctx.window;
+const BTS = ctx.window.HOW_INTERNALS || {}, BTS_OUT = ctx.window.HOW_INTERNALS_OUTPUT || {};
 
 // ---- Check the data before writing anything ----
 const errors = [];
@@ -38,6 +41,11 @@ for (const it of HOW.items) {
   }
 }
 for (const id of Object.keys(META)) if (!byId.has(id)) errors.push(`how-meta.js: "${id}" has no explanation`);
+for (const id of Object.keys(BTS)) if (!byId.has(id)) errors.push(`how-internals: "${id}" has no explanation`);
+const noBts = HOW.items.filter((it) => !BTS[it.id]).map((it) => it.id);
+const noOut = HOW.items.filter((it) => BTS[it.id] && !BTS_OUT[it.id]).map((it) => it.id);
+if (noBts.length) console.warn(`No "Behind the scenes" program yet for: ${noBts.join(", ")}`);
+if (noOut.length) console.warn(`Output missing (run node concepts/run-internals.js) for: ${noOut.join(", ")}`);
 if (errors.length) { console.error("Not generated:\n  " + errors.join("\n  ")); process.exit(1); }
 
 // Reading order: by category, then the order in the data files
@@ -95,6 +103,7 @@ function page(it, i) {
         <span class="eyebrow">${esc(cat.title)} · ${pos} of ${inCat.length}</span>
         <h1>${esc(it.q)}</h1>
         <p class="tldr"><span class="label">In one line</span>${esc(it.tldr)}</p>
+        ${BTS[it.id] ? `<p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>` : ""}
       </header>
 
       <article class="hw hw-page" id="${it.id}">
@@ -105,6 +114,8 @@ function page(it, i) {
         </details>
         ${R.body(it)}
       </article>
+
+      ${R.behind(BTS[it.id], BTS_OUT[it.id], { guide: "../behind-the-scenes.html" })}
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         ${pn(prev, "prev")}

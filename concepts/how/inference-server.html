@@ -26,6 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 1 of 10</span>
         <h1>How does an inference server (like vLLM) handle a request?</h1>
         <p class="tldr"><span class="label">In one line</span>The request is tokenized and queued; a scheduler admits it when there's KV-cache memory, runs prefill, then keeps it in a continuously batched decode loop, streaming tokens back.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-inference-server">
@@ -56,6 +57,49 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A toy inference server loop: queue -> admit if KV memory fits -> prefill -> batched decode -> free.</span>
+from collections import deque
+
+KV_BLOCKS, BLOCK = 12, 4                          <span class="c"># GPU KV-cache memory: 12 blocks of 4 tokens each</span>
+requests = deque([(&quot;A&quot;, 6, 3), (&quot;B&quot;, 10, 2), (&quot;C&quot;, 20, 4), (&quot;D&quot;, 4, 2)])  <span class="c"># (id, prompt tokens, output tokens)</span>
+blocks_for = lambda tokens: -(-tokens // BLOCK)   <span class="c"># round up</span>
+free, running, step = KV_BLOCKS, {}, 0
+
+while requests or running:
+    step += 1
+    <span class="c"># <b>Step 1-2</b>: requests arrive tokenized and queued; admit them while KV memory is free.</span>
+    <span class="c"># (Simplified: real engines grow each request's blocks as it generates - see PagedAttention.)</span>
+    while requests and blocks_for(requests[0][1] + requests[0][2]) &lt;= free:
+        rid, prompt_len, out_len = requests.popleft()
+        need = blocks_for(prompt_len + out_len)
+        free -= need
+        running[rid] = {&quot;left&quot;: out_len, &quot;blocks&quot;: need}
+        <span class="c"># <b>Step 3</b>: prefill the whole prompt in one pass, filling its KV cache</span>
+        print(f&quot;step {step}: admit {rid}: prefill {prompt_len} tokens, {need} blocks ({free} free)&quot;)
+    <span class="c"># <b>Step 4</b>: one decode step = one new token for EVERY running request, in one batch</span>
+    for rid in list(running):
+        running[rid][&quot;left&quot;] -= 1
+        if running[rid][&quot;left&quot;] == 0:
+            <span class="c"># <b>Step 5</b>: finished - stream the last token back and free its memory</span>
+            free += running.pop(rid)[&quot;blocks&quot;]
+            print(f&quot;step {step}: {rid} finished, {free} blocks free&quot;)
+print(f&quot;all 4 requests done in {step} decode steps&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">step 1: admit A: prefill 6 tokens, 3 blocks (9 free)
+step 1: admit B: prefill 10 tokens, 3 blocks (6 free)
+step 1: admit C: prefill 20 tokens, 6 blocks (0 free)
+step 2: B finished, 3 blocks free
+step 3: admit D: prefill 4 tokens, 2 blocks (1 free)
+step 3: A finished, 4 blocks free
+step 4: C finished, 10 blocks free
+step 4: D finished, 12 blocks free
+all 4 requests done in 4 decode steps</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Start vLLM (<code>vllm serve &lt;model></code>) and read the startup log: model load time, KV-cache size in tokens, and the maximum concurrency it can hold.</li><li><code>curl localhost:8000/metrics | grep vllm</code> shows the scheduler live: running and waiting requests, KV-cache usage, time to first token.</li><li>Send 20 requests at once (e.g. with <code>xargs -P 20 curl ...</code>) and watch those numbers move, alongside <code>nvidia-smi</code> for GPU memory and utilization.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="callbacks-tracing.html">

@@ -26,6 +26,7 @@
         <span class="eyebrow">Inside the LLM · 5 of 8</span>
         <h1>How does sampling (temperature, top-k, top-p) work?</h1>
         <p class="tldr"><span class="label">In one line</span>Scores are divided by the temperature, turned into probabilities, cut down to the most likely tokens, and then one token is drawn at random.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-sampling">
@@ -65,6 +66,51 @@ def sample(logits, temperature=0.7, top_p=0.9):
     keep = order[: np.searchsorted(np.cumsum(p[order]), top_p) + 1]
     return int(np.random.choice(keep, p=p[keep] / p[keep].sum()))</pre>
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import math, random
+random.seed(1)
+
+<span class="c"># <b>Step 1</b>: raw scores (logits) for the next token after &quot;The weather today is&quot;</span>
+logits = {&quot;sunny&quot;: 3.0, &quot;cloudy&quot;: 2.5, &quot;rainy&quot;: 2.0, &quot;cold&quot;: 1.0, &quot;purple&quot;: -1.0}
+
+def softmax(scores, temperature):
+    <span class="c"># <b>Step 2</b>: divide by the temperature. <b>Step 3</b>: softmax -> probabilities that add up to 1</span>
+    exps = {t: math.exp(s / temperature) for t, s in scores.items()}
+    total = sum(exps.values())
+    return {t: e / total for t, e in exps.items()}
+
+for temp in (0.2, 1.0, 2.0):
+    probs = softmax(logits, temp)
+    print(f&quot;T={temp}: &quot; + &quot;  &quot;.join(f&quot;{t} {p:.2f}&quot; for t, p in probs.items()))
+
+<span class="c"># <b>Step 4</b>: top-p keeps the smallest set of tokens whose probabilities reach p</span>
+def top_p(probs, p=0.9):
+    kept, total = {}, 0.0
+    for tok, pr in sorted(probs.items(), key=lambda kv: -kv[1]):
+        kept[tok] = pr
+        total += pr
+        if total >= p:
+            break
+    return kept
+
+kept = top_p(softmax(logits, 1.0), 0.9)
+print(&quot;top-p 0.9 keeps:&quot;, list(kept))
+<span class="c"># <b>Step 5</b>: draw one token at random, weighted by probability</span>
+draws = [random.choices(list(kept), weights=list(kept.values()))[0] for _ in range(10)]
+print(&quot;10 draws:&quot;, draws)
+print(&quot;temperature 0 (greedy) always picks:&quot;, max(logits, key=logits.get))
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">T=0.2: sunny 0.92  cloudy 0.08  rainy 0.01  cold 0.00  purple 0.00
+T=1.0: sunny 0.47  cloudy 0.29  rainy 0.17  cold 0.06  purple 0.01
+T=2.0: sunny 0.35  cloudy 0.27  rainy 0.21  cold 0.13  purple 0.05
+top-p 0.9 keeps: ['sunny', 'cloudy', 'rainy']
+10 draws: ['sunny', 'rainy', 'cloudy', 'sunny', 'sunny', 'sunny', 'cloudy', 'cloudy', 'sunny', 'sunny']
+temperature 0 (greedy) always picks: sunny</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Ask an API for <code>logprobs=True, top_logprobs=5</code> and print the alternatives for each output token; then change <code>temperature</code> and watch them shift.</li><li>Hugging Face: <code>model.generate(..., do_sample=True, temperature=0.7, top_p=0.9)</code>; set <code>do_sample=False</code> for greedy decoding.</li><li>Run the same prompt 5 times at temperature 0 and at 1.0 to feel the difference in variety.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="kv-cache.html">

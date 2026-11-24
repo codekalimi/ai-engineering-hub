@@ -26,6 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 10 of 10</span>
         <h1>How does autoscaling LLM inference work?</h1>
         <p class="tldr"><span class="label">In one line</span>Load metrics like queue depth or KV-cache usage trigger new replicas; if no GPU node is free, the node autoscaler adds one, and the replica takes traffic once the model is loaded.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-autoscaling">
@@ -56,6 +57,43 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A queue-based autoscaler for LLM replicas.</span>
+import math
+
+traffic = [4, 6, 12, 20, 20, 18, 8, 4, 2, 2]     <span class="c"># new requests per tick</span>
+CAPACITY, STARTUP_TICKS = 4, 2                   <span class="c"># requests per replica per tick; time to become ready</span>
+ready, starting, queue = 1, [], 0                <span class="c"># starting = ticks left for each new replica</span>
+
+for t, arriving in enumerate(traffic):
+    <span class="c"># <b>Step 4-5</b>: replicas that have loaded their weights and passed readiness start serving</span>
+    starting = [s - 1 for s in starting]
+    ready += starting.count(0)
+    starting = [s for s in starting if s > 0]
+    queue = max(0, queue + arriving - ready * CAPACITY)
+    <span class="c"># <b>Step 1-2</b>: the autoscaler reads the queue metric (not CPU) and decides</span>
+    desired = max(1, math.ceil((queue + arriving) / CAPACITY))
+    if desired > ready + len(starting):
+        starting += [STARTUP_TICKS] * (desired - ready - len(starting))   <span class="c"># <b>Step 3</b>: may need a new GPU node</span>
+    elif desired &lt; ready and queue == 0:
+        ready -= 1                                 <span class="c"># scale down slowly, one replica at a time</span>
+    print(f&quot;t={t}: arriving {arriving:2}  queue {queue:2}  ready {ready}  starting {len(starting)}&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">t=0: arriving  4  queue  0  ready 1  starting 0
+t=1: arriving  6  queue  2  ready 1  starting 1
+t=2: arriving 12  queue 10  ready 1  starting 5
+t=3: arriving 20  queue 22  ready 2  starting 9
+t=4: arriving 20  queue 18  ready 6  starting 5
+t=5: arriving 18  queue  0  ready 10  starting 0
+t=6: arriving  8  queue  0  ready 9  starting 0
+t=7: arriving  4  queue  0  ready 8  starting 0
+t=8: arriving  2  queue  0  ready 7  starting 0
+t=9: arriving  2  queue  0  ready 6  starting 0</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Kubernetes: <code>kubectl get hpa -w</code> shows desired vs current replicas changing as the metric moves; <code>kubectl describe hpa &lt;name></code> shows why it scaled.</li><li><code>kubectl get pods -w</code> during a scale-up shows how long a new replica spends Pending (waiting for a GPU node) and starting (loading weights) before it is Ready.</li><li>Scale on the serving engine’s queue or KV-cache metric (e.g. with KEDA or a custom-metrics adapter), not on CPU.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="semantic-caching.html">

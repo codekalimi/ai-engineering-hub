@@ -83,7 +83,43 @@
           <span class="legend-item"><span class="for">or</span>alternatives</span>
         </div>`;
 
-  const R = { esc, node, flow, seq, diagram, diagrams, body, legend };
+  // ---- Behind the scenes: runnable Python + its real output + how to watch the real system ----
+  const inline = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
+
+  // Dim Python comments (a "#" outside quotes) and make "Step N" stand out, so code maps to the steps
+  function pyHighlight(code) {
+    return code.split("\n").map((line) => {
+      let q = null, cut = -1;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (q) { if (ch === "\\") i++; else if (ch === q) q = null; }
+        else if (ch === '"' || ch === "'") q = ch;
+        else if (ch === "#") { cut = i; break; }
+      }
+      if (cut < 0) return esc(line);
+      const comment = esc(line.slice(cut)).replace(/(Steps? \d+(?:[-–,+ ]+\d+)*(?: \([^)]*\))?)/g, "<b>$1</b>");
+      return esc(line.slice(0, cut)) + `<span class="c">${comment}</span>`;
+    }).join("\n");
+  }
+
+  // bts = { code, see[] }, out = captured stdout. opts.guide = link to the general guide page.
+  function behind(bts, out, opts) {
+    if (!bts) return "";
+    opts = opts || {};
+    const inner = `
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>${pyHighlight(bts.code)}</pre></div>
+          ${out ? `<span class="label">What it prints</span><pre class="bts-out">${esc(out)}</pre>` : ""}
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see">${bts.see.map((s) => `<li>${inline(s)}</li>`).join("")}</ul>
+          ${opts.guide ? `<p class="bts-more">More ways to look inside any AI tool: <a href="${opts.guide}">How to see behind the scenes</a></p>` : ""}`;
+    if (opts.collapsed) {
+      return `<details class="bts bts-details"><summary><span class="label">Behind the scenes</span> runnable code, its real output, and how to watch it for real</summary>${inner}</details>`;
+    }
+    return `<section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>${inner}</section>`;
+  }
+
+  const R = { esc, node, flow, seq, diagram, diagrams, body, legend, behind, pyHighlight };
   if (typeof module !== "undefined" && module.exports) { module.exports = R; return; }
   root.HowRender = R;
 
@@ -109,6 +145,7 @@
         </header>
         <p class="tldr"><span class="label">In one line</span>${esc(it.tldr)}</p>
         ${body(it)}
+        ${behind((root.HOW_INTERNALS || {})[it.id], (root.HOW_INTERNALS_OUTPUT || {})[it.id], { collapsed: true, guide: "behind-the-scenes.html" })}
       </article>`;
     }).join("");
     return `<section class="section hwcat" id="${c.id}">

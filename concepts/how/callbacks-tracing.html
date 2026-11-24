@@ -26,6 +26,7 @@
         <span class="eyebrow">LangChain &amp; LangGraph · 7 of 7</span>
         <h1>How do callbacks and tracing (LangSmith) work?</h1>
         <p class="tldr"><span class="label">In one line</span>Every Runnable reports events (start, token, end, error) with a run ID and its parent's ID; tracers collect them into a tree showing each step's input, output, time and tokens.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-callbacks">
@@ -56,6 +57,79 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Every run gets an id and a parent id; handlers receive start/end events.</span>
+import itertools
+ids = itertools.count(1)
+
+class PrintHandler:                      <span class="c"># like a BaseCallbackHandler with on_*_start / on_*_end</span>
+    def on_start(self, run):
+        print(f&quot;{'  ' * run['depth']}start {run['type']}:{run['name']} (run {run['id']}, parent {run['parent']})&quot;)
+    def on_end(self, run, out):
+        print(f&quot;{'  ' * run['depth']}end   {run['name']} -> {out!r}&quot;)
+
+class Tracer:                            <span class="c"># like LangSmith: collect the runs, rebuild the tree later</span>
+    def __init__(self):
+        self.runs = []
+    def on_start(self, run):
+        self.runs.append(run)
+    def on_end(self, run, out):
+        run[&quot;output&quot;] = out
+
+def traced(kind, name):
+    def wrap(fn):
+        def inner(x, config, parent=None, depth=0):
+            run = {&quot;id&quot;: next(ids), &quot;parent&quot;: parent, &quot;type&quot;: kind, &quot;name&quot;: name, &quot;depth&quot;: depth}  <span class="c"># <b>Step 1</b></span>
+            for h in config[&quot;callbacks&quot;]:
+                h.on_start(run)          <span class="c"># <b>Step 2-3</b>: events go to every attached handler</span>
+            out = fn(x, config, run[&quot;id&quot;], depth + 1)
+            for h in config[&quot;callbacks&quot;]:
+                h.on_end(run, out)
+            return out
+        return inner
+    return wrap
+
+@traced(&quot;retriever&quot;, &quot;search_docs&quot;)
+def retrieve(q, config, parent, depth):
+    return [&quot;doc about &quot; + q]
+
+@traced(&quot;llm&quot;, &quot;chat_model&quot;)
+def llm(docs, config, parent, depth):
+    return &quot;answer using &quot; + docs[0]
+
+@traced(&quot;chain&quot;, &quot;rag_chain&quot;)
+def rag(q, config, parent, depth):
+    return llm(retrieve(q, config, parent, depth), config, parent, depth)
+
+tracer = Tracer()
+rag(&quot;refunds&quot;, {&quot;callbacks&quot;: [PrintHandler(), tracer]})
+
+<span class="c"># <b>Step 4-5</b>: a tracer sends the runs to a server; parent ids rebuild the tree</span>
+children = {}
+for r in tracer.runs:
+    children.setdefault(r[&quot;parent&quot;], []).append(r)
+def show(parent, indent=0):
+    for r in children.get(parent, []):
+        print(&quot;  &quot; * indent + f&quot;- {r['name']} ({r['type']})&quot;)
+        show(r[&quot;id&quot;], indent + 1)
+print(&quot;trace tree:&quot;)
+show(None)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">start chain:rag_chain (run 1, parent None)
+  start retriever:search_docs (run 2, parent 1)
+  end   search_docs -> ['doc about refunds']
+  start llm:chat_model (run 3, parent 1)
+  end   chat_model -> 'answer using doc about refunds'
+end   rag_chain -> 'answer using doc about refunds'
+trace tree:
+- rag_chain (chain)
+  - search_docs (retriever)
+  - chat_model (llm)</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Write a handler: subclass <code>BaseCallbackHandler</code>, implement <code>on_chat_model_start</code>, <code>on_llm_end</code> and <code>on_tool_start</code>, and pass it with <code>chain.invoke(x, config={&quot;callbacks&quot;: [MyHandler()]})</code>.</li><li>Set <code>LANGSMITH_TRACING=true</code> and <code>LANGSMITH_API_KEY</code> to send the same events to LangSmith and browse the run tree.</li><li>Each event carries <code>run_id</code> and <code>parent_run_id</code>: print them to see how the tree below is rebuilt.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="sse-streaming.html">

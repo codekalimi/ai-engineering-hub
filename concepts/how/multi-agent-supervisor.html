@@ -26,6 +26,7 @@
         <span class="eyebrow">Tools &amp; agents · 4 of 7</span>
         <h1>How does a multi-agent supervisor work?</h1>
         <p class="tldr"><span class="label">In one line</span>A supervisor agent looks at the task and hands each piece to a specialist agent with its own tools and instructions, collecting results until the job is done.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-supervisor">
@@ -64,6 +65,47 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A supervisor is an LLM whose &quot;tools&quot; are other agents. Everything is stubbed so the routing is visible.</span>
+def research_agent(task):
+    return &quot;Q3 revenue was 4.2M, up 12% on Q2.&quot;
+def writer_agent(task):
+    return &quot;Draft: 'Team - Q3 revenue reached 4.2M (+12%). Great work!'&quot;
+AGENTS = {&quot;researcher&quot;: research_agent, &quot;writer&quot;: writer_agent}
+
+def supervisor_llm(task, results):
+    <span class="c"># <b>Step 1-2</b>: decide which specialist should act next (a real supervisor asks an LLM this,</span>
+    <span class="c"># usually with structured output like {&quot;next&quot;: &quot;writer&quot;, &quot;instruction&quot;: &quot;...&quot;})</span>
+    if &quot;researcher&quot; not in results:
+        return &quot;researcher&quot;, &quot;find the Q3 revenue numbers&quot;
+    if &quot;writer&quot; not in results:
+        return &quot;writer&quot;, &quot;write a short team email using: &quot; + results[&quot;researcher&quot;]
+    return &quot;FINISH&quot;, results[&quot;writer&quot;]
+
+task = &quot;Email the team a summary of Q3 revenue&quot;
+results = {}
+for turn in range(1, 6):
+    choice, instruction = supervisor_llm(task, results)
+    if choice == &quot;FINISH&quot;:
+        <span class="c"># <b>Step 4</b>: the supervisor is satisfied and returns the final answer</span>
+        print(f&quot;turn {turn}: supervisor -> FINISH\nfinal: {instruction}&quot;)
+        break
+    print(f&quot;turn {turn}: supervisor -> {choice}: {instruction!r}&quot;)
+    <span class="c"># <b>Step 3</b>: the specialist runs its own loop (own prompt, own tools) and reports back</span>
+    results[choice] = AGENTS[choice](instruction)
+    print(f&quot;        {choice} reports: {results[choice]}&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">turn 1: supervisor -> researcher: 'find the Q3 revenue numbers'
+        researcher reports: Q3 revenue was 4.2M, up 12% on Q2.
+turn 2: supervisor -> writer: 'write a short team email using: Q3 revenue was 4.2M, up 12% on Q2.'
+        writer reports: Draft: 'Team - Q3 revenue reached 4.2M (+12%). Great work!'
+turn 3: supervisor -> FINISH
+final: Draft: 'Team - Q3 revenue reached 4.2M (+12%). Great work!'</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>LangGraph: <code>graph.stream(inputs, stream_mode=&quot;updates&quot;, subgraphs=True)</code> prints which agent (node or subgraph) ran at each step and what it returned.</li><li>Draw the graph: <code>print(graph.get_graph().draw_mermaid())</code>, then paste it into any Mermaid viewer.</li><li>In LangSmith, each specialist appears as its own branch of the trace, so you can see every routing decision and its cost.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="mcp.html">

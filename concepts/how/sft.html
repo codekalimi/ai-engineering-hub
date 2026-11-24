@@ -26,6 +26,7 @@
         <span class="eyebrow">Training &amp; fine-tuning · 1 of 5</span>
         <h1>How does supervised fine-tuning (SFT) work?</h1>
         <p class="tldr"><span class="label">In one line</span>The model is trained on example prompt → ideal-answer pairs: it predicts the answer tokens, the error is measured, and the weights are nudged to make the ideal answer more likely.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-sft">
@@ -60,6 +61,46 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import math
+
+<span class="c"># <b>Step 1</b>: one example of the behaviour we want (real runs use hundreds to thousands)</span>
+example = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Capital of France?&quot;}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;Paris.&quot;}]
+
+<span class="c"># <b>Step 2</b>: format with the chat template (each model family has its own special tokens)</span>
+def chat_template(messages):
+    return &quot;&quot;.join(f&quot;&lt;|{m['role']}|>{m['content']}&lt;|end|>&quot; for m in messages)
+print(&quot;training text:&quot;, chat_template(example))
+
+<span class="c"># <b>Step 4 (setup)</b>: only the ANSWER tokens count - prompt positions get label -100 (ignored)</span>
+tokens = [&quot;&lt;|user|>&quot;, &quot;Capital&quot;, &quot;of&quot;, &quot;France?&quot;, &quot;&lt;|end|>&quot;, &quot;&lt;|assistant|>&quot;, &quot;Paris.&quot;, &quot;&lt;|end|>&quot;]
+answer_start = tokens.index(&quot;&lt;|assistant|>&quot;) + 1
+labels = [tok if i >= answer_start else -100 for i, tok in enumerate(tokens)]
+print(&quot;labels:&quot;, labels)
+
+<span class="c"># <b>Step 3-5</b>: predict the answer token, measure the loss, nudge the weights; repeat</span>
+scores = {&quot;Paris.&quot;: 0.0, &quot;Lyon.&quot;: 0.0, &quot;London.&quot;: 0.0}     <span class="c"># the model's scores for the next token</span>
+for epoch in range(1, 6):
+    z = sum(math.exp(s) for s in scores.values())
+    p = {t: math.exp(s) / z for t, s in scores.items()}
+    loss = -math.log(p[&quot;Paris.&quot;])                          <span class="c"># cross-entropy on the correct token</span>
+    for t in scores:                                       <span class="c"># gradient step, learning rate 1.0</span>
+        scores[t] -= p[t] - (1.0 if t == &quot;Paris.&quot; else 0.0)
+    print(f&quot;epoch {epoch}: P('Paris.') = {p['Paris.']:.2f}, loss = {loss:.2f}&quot;)
+<span class="c"># <b>Step 6</b>: evaluate on examples the model has not seen</span>
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">training text: &lt;|user|>Capital of France?&lt;|end|>&lt;|assistant|>Paris.&lt;|end|>
+labels: [-100, -100, -100, -100, -100, -100, 'Paris.', '&lt;|end|>']
+epoch 1: P('Paris.') = 0.33, loss = 1.10
+epoch 2: P('Paris.') = 0.58, loss = 0.55
+epoch 3: P('Paris.') = 0.72, loss = 0.33
+epoch 4: P('Paris.') = 0.80, loss = 0.23
+epoch 5: P('Paris.') = 0.84, loss = 0.17</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Print <code>tokenizer.apply_chat_template(messages, tokenize=False)</code> for one training example: that string, special tokens included, is what the model is trained on.</li><li>TRL <code>SFTTrainer</code>: look at a collated batch and check that the prompt positions in <code>labels</code> are -100, so only the answer is learned.</li><li>Watch training and evaluation loss together: training loss falling while evaluation loss rises means it is memorizing.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="autoscaling.html">

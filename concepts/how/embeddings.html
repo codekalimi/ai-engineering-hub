@@ -26,6 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 1 of 9</span>
         <h1>How do embeddings and semantic search work?</h1>
         <p class="tldr"><span class="label">In one line</span>An embedding model turns text into a vector so that similar meanings land close together. Search embeds the query and returns the nearest document vectors.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-embeddings">
@@ -63,6 +64,48 @@
 def cosine(a, b):
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))</pre>
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A real embedding model is a trained transformer. Here each word has a hand-made vector over</span>
+<span class="c"># 3 &quot;meaning&quot; dimensions [pets, money, weather]; a text's vector is the average of its words.</span>
+import math
+
+WORDS = {&quot;dog&quot;: [1, 0, 0], &quot;puppy&quot;: [.9, 0, .1], &quot;cat&quot;: [.9, 0, 0], &quot;vet&quot;: [.8, .2, 0],
+         &quot;bank&quot;: [0, 1, 0], &quot;loan&quot;: [0, .9, 0], &quot;interest&quot;: [0, .8, .1], &quot;rate&quot;: [0, .6, .2],
+         &quot;rain&quot;: [0, 0, 1], &quot;storm&quot;: [0, .1, .9], &quot;forecast&quot;: [0, .1, .8]}
+
+def embed(text):
+    <span class="c"># <b>Step 1</b>: text -> a fixed-length vector</span>
+    vecs = [WORDS[w] for w in text.lower().split() if w in WORDS]
+    return [sum(c) / len(vecs) for c in zip(*vecs)]
+
+def cosine(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    return dot / (math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b)))
+
+<span class="c"># <b>Step 3</b>: documents are embedded once and stored</span>
+docs = [&quot;Take your puppy to the vet&quot;, &quot;Bank loan interest rate rises&quot;, &quot;Storm and rain forecast&quot;]
+index = [(d, embed(d)) for d in docs]
+
+<span class="c"># <b>Step 4</b>: the query is embedded with the same model; rank by cosine similarity</span>
+for query in [&quot;my dog is sick&quot;, &quot;what will the rate be on my loan&quot;]:
+    q = embed(query)
+    print(f&quot;query: {query!r}&quot;)
+    for d, v in sorted(index, key=lambda dv: cosine(q, dv[1]), reverse=True):
+        print(f&quot;   {cosine(q, v):.2f}  {d}&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">query: 'my dog is sick'
+   0.99  Take your puppy to the vet
+   0.00  Bank loan interest rate rises
+   0.00  Storm and rain forecast
+query: 'what will the rate be on my loan'
+   1.00  Bank loan interest rate rises
+   0.21  Storm and rain forecast
+   0.12  Take your puppy to the vet</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>sentence-transformers: <code>m = SentenceTransformer(&quot;all-MiniLM-L6-v2&quot;); v = m.encode([&quot;my dog is sick&quot;, &quot;take your puppy to the vet&quot;])</code>, then <code>util.cos_sim(v[0], v[1])</code>.</li><li>Print <code>len(v[0])</code> (the dimension) and a few values: an embedding is just a list of floats.</li><li>Make a small similarity table for 5 sentences, including a paraphrase and an unrelated one, to build intuition for what scores mean.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="structured-output.html">

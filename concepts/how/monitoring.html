@@ -26,6 +26,7 @@
         <span class="eyebrow">Quality, safety &amp; operations · 6 of 6</span>
         <h1>How does production monitoring of an LLM app work?</h1>
         <p class="tldr"><span class="label">In one line</span>Every request is traced with its inputs, retrieved context, outputs, tokens, cost and latency; dashboards and alerts watch these metrics, and feedback flows back into the eval set.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-observability">
@@ -56,6 +57,48 @@
         </div>
         
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import json, random, statistics
+random.seed(11)
+TRACES = []
+
+def handle_request(feature, prompt_version):
+    <span class="c"># <b>Step 1</b>: one trace per request, with each step's timing and the metadata to slice by</span>
+    trace = {&quot;feature&quot;: feature, &quot;prompt_version&quot;: prompt_version, &quot;spans&quot;: []}
+    for name, base in [(&quot;retrieve&quot;, 0.12), (&quot;llm&quot;, 1.1 if prompt_version == &quot;v1&quot; else 2.4)]:
+        trace[&quot;spans&quot;].append({&quot;name&quot;: name, &quot;secs&quot;: round(base * random.uniform(0.8, 1.3), 2)})
+    trace[&quot;tokens&quot;] = 900 if prompt_version == &quot;v1&quot; else 1900
+    trace[&quot;cost_usd&quot;] = trace[&quot;tokens&quot;] * 3 / 1e6
+    trace[&quot;thumbs_up&quot;] = random.random() &lt; (0.8 if prompt_version == &quot;v1&quot; else 0.6)   <span class="c"># <b>Step 3</b></span>
+    TRACES.append(trace)
+
+for _ in range(50):
+    handle_request(&quot;support-chat&quot;, &quot;v1&quot;)
+for _ in range(50):
+    handle_request(&quot;support-chat&quot;, &quot;v2&quot;)          <span class="c"># a new prompt version was deployed</span>
+print(&quot;one trace:&quot;, json.dumps(TRACES[0]))
+
+<span class="c"># <b>Step 2</b>: aggregate per version</span>
+for v in (&quot;v1&quot;, &quot;v2&quot;):
+    ts = [t for t in TRACES if t[&quot;prompt_version&quot;] == v]
+    latencies = sorted(sum(s[&quot;secs&quot;] for s in t[&quot;spans&quot;]) for t in ts)
+    p95 = latencies[int(0.95 * len(latencies)) - 1]
+    up = sum(t[&quot;thumbs_up&quot;] for t in ts) / len(ts)
+    cost = statistics.mean(t[&quot;cost_usd&quot;] for t in ts)
+    print(f&quot;{v}: p95 latency {p95:.2f}s  cost/request {cost:.4f} USD  thumbs-up {up:.0%}&quot;)
+    <span class="c"># <b>Step 4</b>: alert on regressions</span>
+    if v == &quot;v2&quot; and (up &lt; 0.7 or p95 > 3):
+        print(&quot;ALERT: v2 regressed -> roll back, add the bad traces to the eval set (Step 5)&quot;)
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">one trace: {&quot;feature&quot;: &quot;support-chat&quot;, &quot;prompt_version&quot;: &quot;v1&quot;, &quot;spans&quot;: [{&quot;name&quot;: &quot;retrieve&quot;, &quot;secs&quot;: 0.12}, {&quot;name&quot;: &quot;llm&quot;, &quot;secs&quot;: 1.19}], &quot;tokens&quot;: 900, &quot;cost_usd&quot;: 0.0027, &quot;thumbs_up&quot;: false}
+v1: p95 latency 1.51s  cost/request 0.0027 USD  thumbs-up 76%
+v2: p95 latency 3.19s  cost/request 0.0057 USD  thumbs-up 56%
+ALERT: v2 regressed -> roll back, add the bad traces to the eval set (Step 5)</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>LangSmith or Langfuse: open one trace and read it top to bottom (prompt, retrieved context, tool calls, tokens, latency per step) before building any dashboard.</li><li>OpenTelemetry has GenAI semantic conventions (model, token usage, operation) so LLM spans fit into your existing tracing backend.</li><li>Tag every trace with prompt version, model and feature, then compare a release with the previous one on latency, cost and feedback.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="guardrails.html">

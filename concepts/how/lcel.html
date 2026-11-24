@@ -26,6 +26,7 @@
         <span class="eyebrow">LangChain &amp; LangGraph · 1 of 7</span>
         <h1>How does an LCEL chain (prompt | model | parser) execute?</h1>
         <p class="tldr"><span class="label">In one line</span>The | operator only builds a RunnableSequence object. When you call invoke, it runs each step in order, passing each output into the next step.</p>
+        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-lcel">
@@ -66,6 +67,83 @@ def invoke(x):
         x = step.invoke(x)
     return x</pre>
       </article>
+
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
+          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A from-scratch version of LangChain's Runnable and the | operator.</span>
+from concurrent.futures import ThreadPoolExecutor
+VERBOSE = True
+
+class Runnable:
+    <span class="c"># <b>Step 1</b>: one interface for everything: invoke, batch, stream</span>
+    def invoke(self, x):
+        raise NotImplementedError
+    def __or__(self, other):                       <span class="c"># <b>Step 2</b>: a | b -> RunnableSequence</span>
+        return RunnableSequence(self, coerce(other))
+    def batch(self, xs):                           <span class="c"># <b>Step 5</b>: many inputs in parallel (thread pool)</span>
+        with ThreadPoolExecutor() as pool:
+            return list(pool.map(self.invoke, xs))
+    def stream(self, x):                           <span class="c"># default: one chunk = the whole result</span>
+        yield self.invoke(x)
+
+class RunnableLambda(Runnable):
+    def __init__(self, fn, name):
+        self.fn, self.name = fn, name
+    def invoke(self, x):
+        out = self.fn(x)
+        if VERBOSE:
+            print(f&quot;   {self.name}: {x!r} -> {out!r}&quot;)
+        return out
+
+class RunnableSequence(Runnable):
+    def __init__(self, *steps):
+        self.steps = steps
+    def __or__(self, other):                       <span class="c"># (a | b) | c flattens into one sequence</span>
+        return RunnableSequence(*self.steps, coerce(other))
+    def invoke(self, x):                           <span class="c"># <b>Step 3</b>: feed each output into the next step</span>
+        for step in self.steps:
+            x = step.invoke(x)
+        return x
+    def stream(self, x):                           <span class="c"># <b>Step 4</b>: run the earlier steps, stream the last</span>
+        for step in self.steps[:-1]:
+            x = step.invoke(x)
+        yield from self.steps[-1].stream(x)
+
+def coerce(obj):                                   <span class="c"># plain functions become runnables</span>
+    return obj if isinstance(obj, Runnable) else RunnableLambda(obj, obj.__name__)
+
+class FakeChatModel(Runnable):
+    def stream(self, prompt):                      <span class="c"># a chat model streams token by token</span>
+        yield from [&quot;Paris&quot;, &quot; is&quot;, &quot; the&quot;, &quot; capital&quot;, &quot;.&quot;]
+    def invoke(self, prompt):
+        out = &quot;&quot;.join(self.stream(prompt))
+        if VERBOSE:
+            print(f&quot;   model: {prompt!r} -> {out!r}&quot;)
+        return out
+
+prompt = RunnableLambda(lambda d: f&quot;What is the capital of {d['country']}?&quot;, &quot;prompt&quot;)
+def parser(text): return text.strip().upper()
+
+chain = prompt | FakeChatModel() | parser
+print(&quot;chain is a&quot;, type(chain).__name__, &quot;with&quot;, len(chain.steps), &quot;steps&quot;)
+print(&quot;invoke:&quot;)
+print(&quot; =>&quot;, chain.invoke({&quot;country&quot;: &quot;France&quot;}))
+print(&quot;stream:&quot;, list((prompt | FakeChatModel()).stream({&quot;country&quot;: &quot;France&quot;})))
+VERBOSE = False                                    <span class="c"># threads would interleave the prints</span>
+print(&quot;batch:&quot;, chain.batch([{&quot;country&quot;: &quot;France&quot;}, {&quot;country&quot;: &quot;Japan&quot;}]))
+</pre></div>
+          <span class="label">What it prints</span><pre class="bts-out">chain is a RunnableSequence with 3 steps
+invoke:
+   prompt: {'country': 'France'} -> 'What is the capital of France?'
+   model: 'What is the capital of France?' -> 'Paris is the capital.'
+   parser: 'Paris is the capital.' -> 'PARIS IS THE CAPITAL.'
+ => PARIS IS THE CAPITAL.
+   prompt: {'country': 'France'} -> 'What is the capital of France?'
+stream: ['Paris', ' is', ' the', ' capital', '.']
+batch: ['PARIS IS THE CAPITAL.', 'PARIS IS THE CAPITAL.']</pre>
+          <span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Print the structure: <code>print(type(chain).__name__, chain.steps)</code> (a RunnableSequence), or <code>chain.get_graph().print_ascii()</code> (needs the <code>grandalf</code> package).</li><li><code>from langchain_core.globals import set_debug; set_debug(True)</code> prints every step’s input and output as the chain runs.</li><li>Read the real thing: open <code>langchain_core/runnables/base.py</code> and find <code>__or__</code> and <code>RunnableSequence.invoke</code>; with the mini version below in mind it reads easily.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="delegated-oauth.html">
