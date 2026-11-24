@@ -26,7 +26,7 @@
         <span class="eyebrow">LangChain &amp; LangGraph · 7 of 7</span>
         <h1>How do callbacks and tracing (LangSmith) work?</h1>
         <p class="tldr"><span class="label">In one line</span>Every Runnable reports events (start, token, end, error) with a run ID and its parent's ID; tracers collect them into a tree showing each step's input, output, time and tokens.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-callbacks">
@@ -55,11 +55,74 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>It's the fastest way to debug a wrong answer: open the trace and see exactly what each step received.</li><li>Traces contain user data; mask sensitive fields where needed.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">A callback handler sees every model, tool and chain start and end. LangSmith is the same mechanism, switched on with environment variables.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.chat_models import init_chat_model
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
+class Spy(BaseCallbackHandler):
+    def on_chat_model_start(self, serialized, messages, **kw):
+        print(&quot;MODEL IN: &quot;, [m.content for m in messages[0]])
+    def on_llm_end(self, response, **kw):
+        print(&quot;MODEL OUT:&quot;, response.generations[0][0].text)
+    def on_chain_end(self, outputs, *, parent_run_id=None, **kw):
+        if parent_run_id is None:                      <span class="c"># only the outermost run, not every step</span>
+            print(&quot;CHAIN END:&quot;, repr(outputs))
+
+chain = ChatPromptTemplate.from_template(&quot;Answer briefly: {q}&quot;) | init_chat_model(&quot;anthropic:claude-opus-5-5&quot;) | StrOutputParser()
+chain.invoke({&quot;q&quot;: &quot;How long do refunds take?&quot;}, config={&quot;callbacks&quot;: [Spy()]})
+<span class="c"># For LangSmith instead: export LANGSMITH_TRACING=true LANGSMITH_API_KEY=...  (no code changes)</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langchain-core 1.8.4 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">MODEL IN:  ['Answer briefly: How long do refunds take?']
+MODEL OUT: Refunds take 5 days.
+CHAIN END: 'Refunds take 5 days.'</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">How a tracer rebuilds the run tree: every event carries run_id and parent_run_id.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.chat_models import init_chat_model
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
+class TreeTracer(BaseCallbackHandler):                 <span class="c"># what LangSmith's tracer does, minus the upload</span>
+    def __init__(self):
+        self.runs = {}
+    def _start(self, name, run_id, parent_run_id):
+        self.runs[run_id] = {&quot;name&quot;: name, &quot;parent&quot;: parent_run_id}     <span class="c"># <b>Step 1</b>: id + parent</span>
+    def on_chain_start(self, serialized, inputs, *, run_id, parent_run_id=None, **kw):
+        self._start(kw.get(&quot;name&quot;) or &quot;chain&quot;, run_id, parent_run_id)
+    def on_chat_model_start(self, serialized, messages, *, run_id, parent_run_id=None, **kw):
+        self._start(&quot;chat_model&quot;, run_id, parent_run_id)
+
+tracer = TreeTracer()
+chain = ChatPromptTemplate.from_template(&quot;Answer briefly: {q}&quot;) | init_chat_model(&quot;anthropic:claude-opus-5-5&quot;) | StrOutputParser()
+chain.invoke({&quot;q&quot;: &quot;How long do refunds take?&quot;}, config={&quot;callbacks&quot;: [tracer], &quot;run_name&quot;: &quot;refund_bot&quot;})
+
+def show(parent=None, depth=0):                        <span class="c"># <b>Step 5</b>: rebuild the tree from parent ids</span>
+    for run_id, r in tracer.runs.items():
+        if r[&quot;parent&quot;] == parent:
+            print(&quot;  &quot; * depth + &quot;- &quot; + r[&quot;name&quot;])
+            show(run_id, depth + 1)
+show()
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langchain-core 1.8.4 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">- refund_bot
+  - ChatPromptTemplate
+  - chat_model
+  - StrOutputParser</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langchain_core/tracers/base.py</code> · <code>langchain_core/callbacks/manager.py</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Every run gets an id and a parent id; handlers receive start/end events.</span>
 import itertools
 ids = itertools.count(1)
@@ -117,6 +180,7 @@ def show(parent, indent=0):
 print(&quot;trace tree:&quot;)
 show(None)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">start chain:rag_chain (run 1, parent None)
   start retriever:search_docs (run 2, parent 1)
   end   search_docs -> ['doc about refunds']
@@ -127,9 +191,10 @@ trace tree:
 - rag_chain (chain)
   - search_docs (retriever)
   - chat_model (llm)</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Write a handler: subclass <code>BaseCallbackHandler</code>, implement <code>on_chat_model_start</code>, <code>on_llm_end</code> and <code>on_tool_start</code>, and pass it with <code>chain.invoke(x, config={&quot;callbacks&quot;: [MyHandler()]})</code>.</li><li>Set <code>LANGSMITH_TRACING=true</code> and <code>LANGSMITH_API_KEY</code> to send the same events to LangSmith and browse the run tree.</li><li>Each event carries <code>run_id</code> and <code>parent_run_id</code>: print them to see how the tree below is rebuilt.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="sse-streaming.html">

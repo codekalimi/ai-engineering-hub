@@ -26,7 +26,7 @@
         <span class="eyebrow">Inside the LLM · 2 of 8</span>
         <h1>How does tokenization (BPE) work?</h1>
         <p class="tldr"><span class="label">In one line</span>Byte-pair encoding builds a vocabulary of frequent character sequences. Text is split into the longest known pieces, so common words are one token and rare words become several.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-tokenize">
@@ -59,11 +59,53 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>English averages about 4 characters per token; code, numbers and many other languages need more.</li><li>The model sees pieces, not letters. That's why it can miscount the letters in a word.</li><li>Count tokens with the provider's tokenizer or token-counting endpoint before sending large inputs.</li><li>The example IDs above are illustrative; real IDs depend on the tokenizer.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Count tokens before sending big inputs. Each model family has its own tokenizer; for Claude use the API's count endpoint: client.messages.count_tokens(model=..., messages=...).</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import tiktoken
+
+enc = tiktoken.get_encoding(&quot;o200k_base&quot;)          <span class="c"># the tokenizer used by recent OpenAI models</span>
+for text in [&quot;unbelievable&quot;, &quot;The cat sat on the mat.&quot;, &quot;def add(a, b): return a + b&quot;]:
+    ids = enc.encode(text)
+    print(f&quot;{len(text):2} chars -> {len(ids)} tokens: {[enc.decode([i]) for i in ids]}&quot;)
+print(&quot;Hindi:&quot;, len(enc.encode(&quot;नमस्ते दुनिया&quot;)), &quot;tokens for 13 characters&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with tiktoken 0.14.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">12 chars -> 3 tokens: ['un', 'bel', 'ievable']
+23 chars -> 7 tokens: ['The', ' cat', ' sat', ' on', ' the', ' mat', '.']
+27 chars -> 10 tokens: ['def', ' add', '(a', ',', ' b', '):', ' return', ' a', ' +', ' b']
+Hindi: 5 tokens for 13 characters</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">Inside a Hugging Face tokenizer: a byte-level BPE vocabulary plus the ordered merge rules learned in training.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import json
+from transformers import AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained(&quot;Qwen/Qwen2.5-0.5B-Instruct&quot;)
+spec = json.loads(tok.backend_tokenizer.to_str())[&quot;model&quot;]
+<span class="c"># <b>Step 2</b>'s result: a vocabulary plus merge rules, applied in order</span>
+print(spec[&quot;type&quot;], &quot;- vocabulary&quot;, len(spec[&quot;vocab&quot;]), &quot;pieces,&quot;, len(spec[&quot;merges&quot;]), &quot;merge rules&quot;)
+
+pieces = tok.tokenize(&quot;unbelievable tokenization&quot;)   <span class="c"># <b>Step 3</b>: split into known pieces</span>
+print(pieces)                                         <span class="c"># 'Ġ' marks a leading space</span>
+print(tok.convert_tokens_to_ids(pieces))              <span class="c"># ...and each piece becomes an id</span>
+<span class="c"># <b>Step 1</b>: byte-level, so any text works - even emoji - and nothing is &quot;unknown&quot;</span>
+print(tok.tokenize(&quot;🙂&quot;), &quot;->&quot;, tok.decode(tok.encode(&quot;🙂&quot;)))
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">BPE - vocabulary 151643 pieces, 151387 merge rules
+['un', 'belie', 'vable', 'Ġtoken', 'ization']
+[359, 31798, 23760, 3950, 2022]
+['ðŁĻĤ'] -> 🙂</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>tokenizer.json in any model repo (the 'model' section holds vocab and merges)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Train a tiny BPE tokenizer, then use it.</span>
 from collections import Counter
 
@@ -110,6 +152,7 @@ for w in [&quot;lowest&quot;, &quot;newest&quot;, &quot;slower&quot;]:
     ids = [vocab.setdefault(p, len(vocab)) for p in pieces]
     print(f&quot;{w!r:10} -> {pieces} -> ids {ids}&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">merge 'w' + 'e' (seen 4x)
 merge 'l' + 'o' (seen 3x)
 merge 'r' + '_' (seen 3x)
@@ -121,9 +164,10 @@ merge 'ne' + 'we' (seen 2x)
 'lowest'   -> ['lowe', 'st_'] -> ids [0, 1]
 'newest'   -> ['newe', 'st_'] -> ids [2, 1]
 'slower'   -> ['s', 'lowe', 'r_'] -> ids [3, 0, 4]</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>OpenAI tokenizers: <code>import tiktoken; enc = tiktoken.get_encoding(&quot;o200k_base&quot;); ids = enc.encode(&quot;unbelievable&quot;)</code>, then <code>[enc.decode([i]) for i in ids]</code> shows each piece.</li><li>Hugging Face: <code>AutoTokenizer.from_pretrained(name).tokenize(&quot;unbelievable&quot;)</code> shows the pieces; <code>.encode(...)</code> shows the IDs.</li><li>Compare the same sentence across two tokenizers (and in another language, or code) to see why token counts and costs differ.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="text-generation.html">

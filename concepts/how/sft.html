@@ -26,7 +26,7 @@
         <span class="eyebrow">Training &amp; fine-tuning · 1 of 5</span>
         <h1>How does supervised fine-tuning (SFT) work?</h1>
         <p class="tldr"><span class="label">In one line</span>The model is trained on example prompt → ideal-answer pairs: it predicts the answer tokens, the error is measured, and the weights are nudged to make the ideal answer more likely.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-sft">
@@ -59,11 +59,76 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Data quality matters far more than quantity.</li><li>Too many epochs leads to overfitting: great on training data, worse on new inputs.</li><li>Fine-tuning teaches behaviour and format; use RAG for facts that change.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Supervised fine-tuning with TRL and LoRA, on a list of conversations. Real run: 3 steps on a 0.5B model on CPU (a real job runs thousands of steps on a GPU).</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from datasets import Dataset
+from peft import LoraConfig
+from trl import SFTConfig, SFTTrainer
+
+examples = [  <span class="c"># <b>Step 1</b>: examples of exactly the behaviour you want</span>
+    {&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Refund status for order 123?&quot;},
+                  {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;Order 123: refund issued on 2 May, arrives in 5 days.&quot;}]},
+    {&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Refund status for order 456?&quot;},
+                  {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;Order 456: refund pending approval.&quot;}]},
+] * 4
+
+trainer = SFTTrainer(
+    model=&quot;Qwen/Qwen2.5-0.5B-Instruct&quot;,
+    train_dataset=Dataset.from_list(examples),        <span class="c"># <b>Step 2</b>: chat template applied for you</span>
+    peft_config=LoraConfig(r=8, lora_alpha=16, target_modules=[&quot;q_proj&quot;, &quot;v_proj&quot;]),
+    args=SFTConfig(output_dir=&quot;sft-out&quot;, max_steps=3, per_device_train_batch_size=2, learning_rate=2e-4,
+                   logging_steps=1, report_to=[], save_strategy=&quot;no&quot;, use_cpu=True),
+)
+result = trainer.train()                              <span class="c"># <b>Steps 3-5</b>: forward, loss on answers, update</span>
+print(f&quot;trained {result.global_step} steps, final loss {result.training_loss:.3f}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with datasets 5.2.0, peft 0.22.0, trl 1.18.2.</p>
+        <span class="label">What it printed</span><pre class="bts-out">{'loss': '4.396', 'grad_norm': '12.14', 'learning_rate': '0.0002', 'entropy': '2.24', 'mean_token_accuracy': '0.4679', 'num_tokens': '111', 'epoch': '0.25'}
+{'loss': '4.197', 'grad_norm': '9.608', 'learning_rate': '0.0001333', 'entropy': '2.268', 'mean_token_accuracy': '0.4679', 'num_tokens': '222', 'epoch': '0.5'}
+{'loss': '4.001', 'grad_norm': '9.173', 'learning_rate': '6.667e-05', 'entropy': '2.314', 'mean_token_accuracy': '0.4679', 'num_tokens': '333', 'epoch': '0.75'}
+{'train_runtime': '75.56', 'train_samples_per_second': '0.079', 'train_steps_per_second': '0.04', 'train_loss': '4.198', 'epoch': '0.75'}
+trained 3 steps, final loss 4.198</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What the trainer's data collator does: apply the chat template, then mask everything except the assistant's answer with -100 so only the answer is learned.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+name = &quot;Qwen/Qwen2.5-0.5B-Instruct&quot;
+tok = AutoTokenizer.from_pretrained(name)
+model = AutoModelForCausalLM.from_pretrained(name).eval()
+messages = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Refund status for order 123?&quot;},
+            {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;Refund issued, arrives in 5 days.&quot;}]
+
+prompt = tok.apply_chat_template(messages[:1], add_generation_prompt=True, tokenize=False)   <span class="c"># <b>Step 2</b></span>
+full = tok.apply_chat_template(messages, tokenize=False)
+print(&quot;training text:&quot;, repr(full[-90:]))
+ids = tok(full, return_tensors=&quot;pt&quot;).input_ids
+n_prompt = len(tok(prompt).input_ids)
+labels = ids.clone()
+labels[:, :n_prompt] = -100                                        <span class="c"># <b>Step 4</b>: ignore prompt positions</span>
+print(f&quot;{ids.shape[1]} tokens, {int((labels != -100).sum())} of them count for the loss:&quot;,
+      repr(tok.decode(ids[0, n_prompt:])))
+
+with torch.no_grad():
+    answer_only = model(ids, labels=labels).loss                    <span class="c"># what SFT optimizes</span>
+    everything = model(ids, labels=ids).loss                        <span class="c"># pretraining-style, for contrast</span>
+print(f&quot;loss on the answer only {answer_only:.3f} vs on all tokens {everything:.3f}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0, transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">training text: 'or order 123?&lt;|im_end|>\n&lt;|im_start|>assistant\nRefund issued, arrives in 5 days.&lt;|im_end|>\n'
+51 tokens, 12 of them count for the loss: 'Refund issued, arrives in 5 days.&lt;|im_end|>\n'
+loss on the answer only 3.592 vs on all tokens 4.566</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>trl/trainer/sft_trainer.py (DataCollatorForLanguageModeling, assistant-only loss)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import math
 
 <span class="c"># <b>Step 1</b>: one example of the behaviour we want (real runs use hundreds to thousands)</span>
@@ -91,6 +156,7 @@ for epoch in range(1, 6):
     print(f&quot;epoch {epoch}: P('Paris.') = {p['Paris.']:.2f}, loss = {loss:.2f}&quot;)
 <span class="c"># <b>Step 6</b>: evaluate on examples the model has not seen</span>
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">training text: &lt;|user|>Capital of France?&lt;|end|>&lt;|assistant|>Paris.&lt;|end|>
 labels: [-100, -100, -100, -100, -100, -100, 'Paris.', '&lt;|end|>']
 epoch 1: P('Paris.') = 0.33, loss = 1.10
@@ -98,9 +164,10 @@ epoch 2: P('Paris.') = 0.58, loss = 0.55
 epoch 3: P('Paris.') = 0.72, loss = 0.33
 epoch 4: P('Paris.') = 0.80, loss = 0.23
 epoch 5: P('Paris.') = 0.84, loss = 0.17</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Print <code>tokenizer.apply_chat_template(messages, tokenize=False)</code> for one training example: that string, special tokens included, is what the model is trained on.</li><li>TRL <code>SFTTrainer</code>: look at a collated batch and check that the prompt positions in <code>labels</code> are -100, so only the answer is learned.</li><li>Watch training and evaluation loss together: training loss falling while evaluation loss rises means it is memorizing.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="autoscaling.html">

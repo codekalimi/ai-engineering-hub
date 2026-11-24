@@ -26,7 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 10 of 10</span>
         <h1>How does autoscaling LLM inference work?</h1>
         <p class="tldr"><span class="label">In one line</span>Load metrics like queue depth or KV-cache usage trigger new replicas; if no GPU node is free, the node autoscaler adds one, and the replica takes traffic once the model is loaded.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-autoscaling">
@@ -55,11 +55,79 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Scale-up is slow (minutes), so keep warm replicas or a capacity buffer.</li><li>Cache weights on local NVMe and pre-pull images to shorten cold starts.</li><li>GPU capacity can be scarce; reservations help for critical services.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Scale inference replicas on the serving engine's queue, not on CPU. A KEDA ScaledObject reading vLLM's Prometheus metric (YAML; the test parses it).</p>
+        <div class="bts-code"><span class="bts-file">yaml</span><pre data-copy>apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vllm-chat
+spec:
+  scaleTargetRef:
+    name: vllm-chat              <span class="c"># the Deployment running vLLM</span>
+  minReplicaCount: 1
+  maxReplicaCount: 8
+  cooldownPeriod: 300            <span class="c"># wait before scaling down: new GPU replicas are slow to start</span>
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring:9090
+        query: sum(vllm:num_requests_waiting{deployment=&quot;vllm-chat&quot;})
+        threshold: &quot;5&quot;           <span class="c"># target waiting requests per replica</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Validated:</b> parsed as YAML.</p>
+        <span class="label">What it printed</span><pre class="bts-out">valid YAML: ScaledObject 'vllm-chat'
+  scaleTargetRef: {'name': 'vllm-chat'}
+  minReplicaCount: 1
+  maxReplicaCount: 8
+  cooldownPeriod: 300
+  triggers: [{'type': 'prometheus', 'metadata': {'serverAddress': 'http://prometheus.monitoring:9090', 'query': 'sum(vllm:num_requests_waiting{deployment=&quot;vllm-chat&quot;})', 'threshold': '5'}}]</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">The decision rule the Kubernetes autoscaler applies (KEDA feeds it the metric): desired = ceil(current x metric / target), with a tolerance band and a slow scale-down window.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import math
+
+TARGET, TOLERANCE, MIN, MAX = 5.0, 0.1, 1, 8
+history = []                                       <span class="c"># recent recommendations, for the scale-down window</span>
+
+def desired_replicas(current, waiting_total):
+    per_replica = waiting_total / current          <span class="c"># <b>Step 1</b>: the metric, averaged per replica</span>
+    ratio = per_replica / TARGET
+    if abs(ratio - 1.0) &lt;= TOLERANCE:              <span class="c"># inside the tolerance band: do nothing</span>
+        return current
+    want = min(MAX, max(MIN, math.ceil(current * ratio)))   <span class="c"># <b>Step 2</b>: the HPA formula</span>
+    history.append(want)
+    return max(history[-5:]) if want &lt; current else want    <span class="c"># scale down only to the max of recent wishes</span>
+
+replicas = 1
+for tick, waiting in enumerate([4, 12, 30, 45, 40, 20, 6, 2, 0, 0, 0, 0]):
+    new = desired_replicas(replicas, waiting)
+    note = &quot;&quot; if new == replicas else (&quot;  scale UP (Steps 3-5: new GPU pod, load weights, ready)&quot; if new > replicas else &quot;  scale down&quot;)
+    print(f&quot;t={tick:2}: waiting {waiting:2} on {replicas} replicas -> {new}{note}&quot;)
+    replicas = new
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with Python 3.12.14.</p>
+        <span class="label">What it printed</span><pre class="bts-out">t= 0: waiting  4 on 1 replicas -> 1
+t= 1: waiting 12 on 1 replicas -> 3  scale UP (Steps 3-5: new GPU pod, load weights, ready)
+t= 2: waiting 30 on 3 replicas -> 6  scale UP (Steps 3-5: new GPU pod, load weights, ready)
+t= 3: waiting 45 on 6 replicas -> 8  scale UP (Steps 3-5: new GPU pod, load weights, ready)
+t= 4: waiting 40 on 8 replicas -> 8
+t= 5: waiting 20 on 8 replicas -> 8
+t= 6: waiting  6 on 8 replicas -> 8
+t= 7: waiting  2 on 8 replicas -> 8
+t= 8: waiting  0 on 8 replicas -> 8
+t= 9: waiting  0 on 8 replicas -> 4  scale down
+t=10: waiting  0 on 4 replicas -> 2  scale down
+t=11: waiting  0 on 2 replicas -> 1  scale down</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>kubernetes/pkg/controller/podautoscaler/replica_calculator.go</code> · <code>kubernetes/pkg/controller/podautoscaler/horizontal.go</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A queue-based autoscaler for LLM replicas.</span>
 import math
 
@@ -81,6 +149,7 @@ for t, arriving in enumerate(traffic):
         ready -= 1                                 <span class="c"># scale down slowly, one replica at a time</span>
     print(f&quot;t={t}: arriving {arriving:2}  queue {queue:2}  ready {ready}  starting {len(starting)}&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">t=0: arriving  4  queue  0  ready 1  starting 0
 t=1: arriving  6  queue  2  ready 1  starting 1
 t=2: arriving 12  queue 10  ready 1  starting 5
@@ -91,9 +160,10 @@ t=6: arriving  8  queue  0  ready 9  starting 0
 t=7: arriving  4  queue  0  ready 8  starting 0
 t=8: arriving  2  queue  0  ready 7  starting 0
 t=9: arriving  2  queue  0  ready 6  starting 0</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Kubernetes: <code>kubectl get hpa -w</code> shows desired vs current replicas changing as the metric moves; <code>kubectl describe hpa &lt;name></code> shows why it scaled.</li><li><code>kubectl get pods -w</code> during a scale-up shows how long a new replica spends Pending (waiting for a GPU node) and starting (loading weights) before it is Ready.</li><li>Scale on the serving engine’s queue or KV-cache metric (e.g. with KEDA or a custom-metrics adapter), not on CPU.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="semantic-caching.html">

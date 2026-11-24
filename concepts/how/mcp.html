@@ -26,7 +26,7 @@
         <span class="eyebrow">Tools &amp; agents · 3 of 7</span>
         <h1>How does MCP (Model Context Protocol) work?</h1>
         <p class="tldr"><span class="label">In one line</span>MCP standardizes how AI apps discover and call tools and data: an MCP server describes its tools, and any MCP client can list and call them.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-mcp">
@@ -72,11 +72,78 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Servers can also expose resources (readable data) and prompts (templates).</li><li>Transports: stdio for local servers, HTTP for remote ones, with OAuth for authentication.</li><li>Treat third-party servers as untrusted code: they can inject instructions or exfiltrate data.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Connect to an MCP server, get its tools as LangChain tools, hand them to an agent. The server is the 10-line FastMCP program shown in Level 2.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import asyncio
+import sys
+from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+async def main():
+    client = MultiServerMCPClient({
+        &quot;helpdesk&quot;: {&quot;transport&quot;: &quot;stdio&quot;, &quot;command&quot;: sys.executable, &quot;args&quot;: [&quot;server.py&quot;]},
+    })
+    tools = await client.get_tools()                      <span class="c"># MCP tools -> LangChain tools</span>
+    print(&quot;tools from the server:&quot;, [t.name for t in tools])
+    agent = create_agent(init_chat_model(&quot;anthropic:claude-opus-5-5&quot;), tools)
+    result = await agent.ainvoke({&quot;messages&quot;: [(&quot;user&quot;, &quot;What's the status of ticket T-7?&quot;)]})
+    print(result[&quot;messages&quot;][-1].content)
+
+asyncio.run(main())
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langchain-mcp-adapters 0.3.2 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">tools from the server: ['get_ticket']
+Ticket T-7: the printer on floor 3 is offline, and the ticket is still open.</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">Both halves with the official MCP Python SDK (1.x, the version langchain-mcp-adapters supports): a FastMCP server, and a client session doing the handshake, tools/list and tools/call from the diagram. In SDK 2.x, FastMCP is renamed MCPServer (from mcp.server.mcpserver import MCPServer).</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import asyncio
+import sys
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+SERVER = '''
+from mcp.server.fastmcp import FastMCP
+server = FastMCP(&quot;helpdesk&quot;)
+
+@server.tool()
+def get_ticket(id: str) -> str:
+    &quot;&quot;&quot;Look up a support ticket by id.&quot;&quot;&quot;
+    return {&quot;T-7&quot;: &quot;Printer on floor 3 is offline (open)&quot;}.get(id, &quot;not found&quot;)
+
+server.run()   <span class="c"># stdio transport: JSON-RPC messages on stdin/stdout</span>
+'''
+open(&quot;server.py&quot;, &quot;w&quot;).write(SERVER)
+
+async def main():
+    params = StdioServerParameters(command=sys.executable, args=[&quot;server.py&quot;])   <span class="c"># <b>Step 1</b>: start the server</span>
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            info = await session.initialize()                                     <span class="c"># <b>Step 2</b>: handshake</span>
+            print(&quot;connected to:&quot;, info.serverInfo.name, &quot;| protocol&quot;, info.protocolVersion)
+            listed = await session.list_tools()                                   <span class="c"># tools/list</span>
+            for t in listed.tools:
+                print(&quot;tool:&quot;, t.name, &quot;-&quot;, t.description)                        <span class="c"># <b>Step 3</b>: goes to the LLM</span>
+            result = await session.call_tool(&quot;get_ticket&quot;, {&quot;id&quot;: &quot;T-7&quot;})         <span class="c"># <b>Step 4</b>: tools/call</span>
+            print(&quot;result:&quot;, result.content[0].text)                              <span class="c"># <b>Step 5</b></span>
+
+asyncio.run(main())
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with mcp 1.30.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">connected to: helpdesk | protocol 2025-11-25
+tool: get_ticket - Look up a support ticket by id.
+result: Printer on floor 3 is offline (open)</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>mcp/client/session.py (ClientSession)</code> · <code>mcp/server/fastmcp/server.py</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># MCP = JSON-RPC 2.0 messages between a client (inside the host app) and a server (a separate</span>
 <span class="c"># program, over stdio or HTTP). Here the server is a function so you can read every message.</span>
 import json
@@ -115,6 +182,7 @@ tools = send(&quot;tools/list&quot;)[&quot;tools&quot;]
 result = send(&quot;tools/call&quot;, {&quot;name&quot;: &quot;get_ticket&quot;, &quot;arguments&quot;: {&quot;id&quot;: &quot;T-7&quot;}})
 print(&quot;text handed back to the LLM:&quot;, result[&quot;content&quot;][0][&quot;text&quot;])
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">client -> {&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;id&quot;: 1, &quot;method&quot;: &quot;initialize&quot;, &quot;params&quot;: {&quot;protocolVersion&quot;: &quot;2025-06-18&quot;, &quot;capabili
 server &lt;- {&quot;protocolVersion&quot;: &quot;2025-06-18&quot;, &quot;capabilities&quot;: {&quot;tools&quot;: {}}, &quot;serverInfo&quot;: {&quot;name&quot;: &quot;helpdesk&quot;}}
 client -> {&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;id&quot;: 2, &quot;method&quot;: &quot;tools/list&quot;, &quot;params&quot;: {}}
@@ -122,9 +190,10 @@ server &lt;- {&quot;tools&quot;: [{&quot;name&quot;: &quot;get_ticket&quot;, &qu
 client -> {&quot;jsonrpc&quot;: &quot;2.0&quot;, &quot;id&quot;: 3, &quot;method&quot;: &quot;tools/call&quot;, &quot;params&quot;: {&quot;name&quot;: &quot;get_ticket&quot;, &quot;arguments&quot;: {&quot;id&quot;: 
 server &lt;- {&quot;content&quot;: [{&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;Printer on floor 3 is offline (open)&quot;}]}
 text handed back to the LLM: Printer on floor 3 is offline (open)</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>MCP Inspector: <code>npx @modelcontextprotocol/inspector &lt;command that starts your server></code> opens a UI where you can call initialize, tools/list and tools/call yourself and read the raw JSON-RPC messages.</li><li>A stdio server is just a process reading JSON lines on stdin and writing them on stdout; log them to stderr to watch the conversation.</li><li>In your host app’s logs (Claude Desktop, IDE assistants and others write MCP logs), look for the tools/list response to see exactly which tool descriptions the model receives.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="agent-loop.html">

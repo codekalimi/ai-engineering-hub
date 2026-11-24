@@ -26,7 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 5 of 9</span>
         <h1>How does reranking work (bi-encoder vs cross-encoder)?</h1>
         <p class="tldr"><span class="label">In one line</span>Retrieval embeds the query and documents separately: fast but coarse. A reranker reads the query and each candidate together: slower but much more accurate, so it only runs on a short list.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-rerank">
@@ -63,11 +63,61 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Typical effect: noticeably better precision in the top few results.</li><li>Cost: tens to hundreds of milliseconds per query.</li><li>An LLM can also act as a reranker, at a higher cost.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">A real cross-encoder (an 80 MB model) reranking candidates that a fast first-stage search returned.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from sentence_transformers import CrossEncoder
+
+reranker = CrossEncoder(&quot;cross-encoder/ms-marco-MiniLM-L6-v2&quot;)
+query = &quot;How do I stop my subscription?&quot;
+candidates = [&quot;Subscription plans start at 10 dollars a month.&quot;,          <span class="c"># shares words, wrong answer</span>
+              &quot;Stop words are removed before indexing.&quot;,                  <span class="c"># shares words, unrelated</span>
+              &quot;To cancel, open Settings and choose End membership.&quot;]      <span class="c"># no shared words, right answer</span>
+
+for hit in reranker.rank(query, candidates):
+    print(f&quot;{hit['score']:6.2f}  {candidates[hit['corpus_id']]}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with sentence-transformers 6.3.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out"> -2.08  To cancel, open Settings and choose End membership.
+ -8.47  Stop words are removed before indexing.
+ -8.99  Subscription plans start at 10 dollars a month.</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What CrossEncoder does: tokenize the query and document TOGETHER as one input, run a transformer classifier, read one relevance score per pair.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+name = &quot;cross-encoder/ms-marco-MiniLM-L6-v2&quot;
+tok = AutoTokenizer.from_pretrained(name)
+model = AutoModelForSequenceClassification.from_pretrained(name).eval()
+
+query = &quot;How do I stop my subscription?&quot;
+candidates = [&quot;Subscription plans start at 10 dollars a month.&quot;,
+              &quot;Stop words are removed before indexing.&quot;,
+              &quot;To cancel, open Settings and choose End membership.&quot;]
+batch = tok([query] * len(candidates), candidates, padding=True, return_tensors=&quot;pt&quot;)   <span class="c"># <b>Step 3</b>: pairs</span>
+print(&quot;one input:&quot;, tok.decode(batch[&quot;input_ids&quot;][0], skip_special_tokens=False).replace(&quot; [PAD]&quot;, &quot;&quot;))
+
+with torch.no_grad():
+    scores = model(**batch).logits.squeeze(-1)          <span class="c"># one number per (query, document) pair</span>
+for s, c in sorted(zip(scores.tolist(), candidates), reverse=True):
+    print(f&quot;{s:6.2f}  {c}&quot;)
+<span class="c"># <b>Step 4</b>: one forward pass per candidate - which is why you only rerank the top 20-100</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0, transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">one input: [CLS] how do i stop my subscription? [SEP] subscription plans start at 10 dollars a month. [SEP]
+ -2.08  To cancel, open Settings and choose End membership.
+ -8.47  Stop words are removed before indexing.
+ -8.99  Subscription plans start at 10 dollars a month.</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>sentence_transformers/cross_encoder/CrossEncoder.py (predict)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import re
 words = lambda t: re.findall(r&quot;[a-z]+&quot;, t.lower())
 
@@ -100,6 +150,7 @@ print(&quot;cross-encoder rerank:&quot;)
 for d in sorted(candidates, key=lambda d: -cross_score(query, d)):
     print(f&quot;  {cross_score(query, d):.2f}  {d}&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">bi-encoder (fast, but query and document never meet):
   0.71  Flights from Mumbai to Delhi every morning
   0.50  Delhi to Mumbai flights depart every hour
@@ -108,9 +159,10 @@ cross-encoder rerank:
   0.92  Delhi to Mumbai flights depart every hour
   0.60  Flights from Mumbai to Delhi every morning
   0.16  Mumbai and Delhi hotel deals</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>sentence-transformers: <code>CrossEncoder(&quot;cross-encoder/ms-marco-MiniLM-L-6-v2&quot;).predict([(query, doc) for doc in candidates])</code> returns one relevance score per pair.</li><li>Hosted rerankers (Cohere, Voyage, Jina and others) take a query plus a list of documents and return them re-sorted with scores; log the order before and after.</li><li>Measure it: recall@5 or MRR on a small labelled set, with and without the reranker.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="hybrid-search-rrf.html">

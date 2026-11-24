@@ -26,7 +26,7 @@
         <span class="eyebrow">Quality, safety &amp; operations · 3 of 6</span>
         <h1>How do you measure RAG quality (retrieval vs generation)?</h1>
         <p class="tldr"><span class="label">In one line</span>Score the two halves separately: did retrieval find the right chunks, and is the answer faithful to those chunks, relevant to the question and correct?</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-rag-eval">
@@ -59,11 +59,73 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Low recall → fix retrieval (chunking, hybrid search, reranking). Low faithfulness with good recall → fix the prompt or model.</li><li>Libraries such as Ragas and LangSmith evaluators implement these metrics.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Score the retriever on its own with labelled questions: recall@k and MRR. Real retriever and real (local) embeddings.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.embeddings import init_embeddings
+from langchain_core.vectorstores import InMemoryVectorStore
+
+chunks = {&quot;c1&quot;: &quot;Refunds are accepted within 30 days of purchase.&quot;,
+          &quot;c2&quot;: &quot;Shipping takes 3 to 5 working days.&quot;,
+          &quot;c3&quot;: &quot;Our warranty covers manufacturing defects for 2 years.&quot;,
+          &quot;c4&quot;: &quot;Support is open 9am to 5pm on weekdays.&quot;}
+store = InMemoryVectorStore(init_embeddings(&quot;openai:text-embedding-3-small&quot;))
+store.add_texts(list(chunks.values()), ids=list(chunks))
+
+labelled = [(&quot;How long do I have to return something?&quot;, &quot;c1&quot;),      <span class="c"># <b>Step 1</b>: question -> right chunk</span>
+            (&quot;How long is the warranty?&quot;, &quot;c3&quot;),
+            (&quot;When can I call support?&quot;, &quot;c4&quot;),
+            (&quot;Is a broken screen covered?&quot;, &quot;c3&quot;)]
+k, hits, rr = 2, 0, 0.0
+for question, right in labelled:
+    ranked = [d.id for d in store.similarity_search(question, k=k)]
+    hits += right in ranked                                           <span class="c"># <b>Step 2</b>: recall@k</span>
+    rr += 1 / (ranked.index(right) + 1) if right in ranked else 0     <span class="c">#         and MRR</span>
+    print(f&quot;{question!r:44} -> {ranked} {'ok' if right in ranked else 'MISS'}&quot;)
+print(f&quot;recall@{k} = {hits}/{len(labelled)}, MRR = {rr / len(labelled):.2f}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langchain-core 1.8.4 · with a local embedding model (all-MiniLM-L6-v2) in place of the embedding API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">'How long do I have to return something?'    -> ['c1', 'c2'] ok
+'How long is the warranty?'                  -> ['c3', 'c2'] ok
+'When can I call support?'                   -> ['c4', 'c2'] ok
+'Is a broken screen covered?'                -> ['c3', 'c4'] ok
+recall@2 = 4/4, MRR = 1.00</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">How a faithfulness metric (as in Ragas) works: one LLM call splits the answer into claims, another checks each claim against the context; the score is the supported fraction.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from pydantic import BaseModel
+from langchain.chat_models import init_chat_model
+
+class Claims(BaseModel):
+    claims: list[str]
+
+class Verdict(BaseModel):
+    supported: bool
+
+judge = init_chat_model(&quot;anthropic:claude-sonnet-5-5&quot;)
+context = &quot;Support is open 9am to 5pm on weekdays.&quot;
+answer = &quot;Support is open 9am to 5pm, including weekends.&quot;
+
+claims = judge.with_structured_output(Claims).invoke(f&quot;Split into atomic factual claims:\n{answer}&quot;).claims
+verdicts = [judge.with_structured_output(Verdict).invoke(f&quot;Context: {context}\nIs this claim supported? {c}&quot;).supported
+            for c in claims]                                       <span class="c"># <b>Step 3</b>: one check per claim</span>
+for c, v in zip(claims, verdicts):
+    print(f&quot;{'supported  ' if v else 'UNSUPPORTED'} {c}&quot;)
+print(f&quot;faithfulness = {sum(verdicts)}/{len(verdicts)} = {sum(verdicts) / len(verdicts):.2f}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">supported   Support is open 9am to 5pm.
+UNSUPPORTED Support is open on weekends.
+faithfulness = 1/2 = 0.50</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>ragas/metrics/_faithfulness.py</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># <b>Step 1</b>: for each test question, which chunk ids contain the answer</span>
 tests = [
     {&quot;q&quot;: &quot;refund window&quot;, &quot;relevant&quot;: {&quot;c7&quot;}, &quot;retrieved&quot;: [&quot;c2&quot;, &quot;c7&quot;, &quot;c9&quot;],
@@ -89,15 +151,17 @@ print(f&quot;recall@{k} = {sum(t['recall'] for t in tests)}/{n}, MRR = {sum(t['r
 print(&quot;diagnosis: 'warranty' failed at retrieval (fix search); 'support hours' retrieved well but&quot;)
 print(&quot;           added an unsupported claim (fix the prompt or the model)&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">refund window    recall@3=1  RR=0.50  faithful=True  correct=True
 warranty length  recall@3=0  RR=0.00  faithful=False  correct=False
 support hours    recall@3=1  RR=1.00  faithful=False  correct=True
 recall@3 = 2/3, MRR = 0.50
 diagnosis: 'warranty' failed at retrieval (fix search); 'support hours' retrieved well but
            added an unsupported claim (fix the prompt or the model)</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Log the retrieved chunk ids for every test question; recall@k and MRR need nothing more than those ids and your labels.</li><li>Libraries such as Ragas, DeepEval and LangSmith evaluators provide faithfulness and relevance judges; read a sample of their verdicts before trusting the numbers.</li><li>For every failure, decide first: was the right chunk retrieved? That single question splits retrieval bugs from generation bugs.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="llm-as-judge.html">

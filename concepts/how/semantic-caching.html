@@ -26,7 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 9 of 10</span>
         <h1>How does semantic caching work?</h1>
         <p class="tldr"><span class="label">In one line</span>Questions are embedded; if a new question is close enough in meaning to one already answered, the stored answer is returned without calling the LLM.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-semantic-cache">
@@ -59,11 +59,80 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Great for FAQ-style traffic; risky when answers depend on the user or change over time.</li><li>Scope the cache per tenant or user where answers are personal.</li><li>Tune the threshold with real examples; too loose returns wrong answers.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">A semantic cache in front of the model: a vector store of past questions, reused above a similarity threshold. Real embeddings, so you can see a correct hit and a dangerous one.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.chat_models import init_chat_model
+from langchain.embeddings import init_embeddings
+from langchain_core.vectorstores import InMemoryVectorStore
+
+model = init_chat_model(&quot;anthropic:claude-opus-5-5&quot;)
+cache = InMemoryVectorStore(init_embeddings(&quot;openai:text-embedding-3-small&quot;))
+THRESHOLD = 0.7
+
+def ask(question):
+    hits = cache.similarity_search_with_score(question, k=1)
+    if hits and hits[0][1] >= THRESHOLD:
+        doc, score = hits[0]
+        print(f&quot;HIT  {score:.2f} {question!r} reuses {doc.page_content!r}&quot;)
+        return doc.metadata[&quot;answer&quot;]
+    answer = model.invoke(question).content
+    cache.add_texts([question], metadatas=[{&quot;answer&quot;: answer}])
+    print(f&quot;MISS {hits[0][1] if hits else 0:.2f} {question!r} -> called the model&quot;)
+    return answer
+
+for q in [&quot;How do I get a refund?&quot;, &quot;How can I get my money back?&quot;, &quot;When will my order ship?&quot;,
+          &quot;Cancel my subscription&quot;, &quot;Do not cancel my subscription&quot;]:
+    ask(q)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langchain-core 1.8.4 · with a scripted chat model in place of the API; a local embedding model (all-MiniLM-L6-v2) in place of the embedding API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">MISS 0.00 'How do I get a refund?' -> called the model
+HIT  0.73 'How can I get my money back?' reuses 'How do I get a refund?'
+MISS 0.22 'When will my order ship?' -> called the model
+MISS 0.29 'Cancel my subscription' -> called the model
+HIT  0.97 'Do not cancel my subscription' reuses 'Cancel my subscription'</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">Choosing the threshold: the real similarity scores between question pairs that should and should not share an answer.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import numpy as np
+from langchain.embeddings import init_embeddings
+
+emb = init_embeddings(&quot;openai:text-embedding-3-small&quot;)
+pairs = [  <span class="c"># (question A, question B, should they share an answer?)</span>
+    (&quot;How do I get a refund?&quot;, &quot;How can I get my money back?&quot;, True),
+    (&quot;When will my order ship?&quot;, &quot;How long until my parcel is dispatched?&quot;, True),
+    (&quot;Cancel my subscription&quot;, &quot;Do not cancel my subscription&quot;, False),
+    (&quot;Reset my password&quot;, &quot;Reset my router&quot;, False),
+]
+scores = []
+for a, b, same in pairs:
+    va, vb = np.array(emb.embed_query(a)), np.array(emb.embed_query(b))
+    s = float(va @ vb / (np.linalg.norm(va) * np.linalg.norm(vb)))     <span class="c"># <b>Steps 1-2</b>: cosine similarity</span>
+    scores.append((s, same))
+    print(f&quot;{s:.2f}  {'same answer' if same else 'DIFFERENT':11}  {a!r} vs {b!r}&quot;)
+
+for t in (0.7, 0.8, 0.9):                                              <span class="c"># <b>Step 3</b>: the threshold decides</span>
+    good = sum(s >= t for s, same in scores if same)
+    bad = sum(s >= t for s, same in scores if not same)
+    print(f&quot;threshold {t}: {good}/2 correct hits, {bad} wrong hits&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with numpy 2.5.5, langchain 1.5.2 · with a local embedding model (all-MiniLM-L6-v2) in place of the embedding API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">0.73  same answer  'How do I get a refund?' vs 'How can I get my money back?'
+0.57  same answer  'When will my order ship?' vs 'How long until my parcel is dispatched?'
+0.97  DIFFERENT    'Cancel my subscription' vs 'Do not cancel my subscription'
+0.50  DIFFERENT    'Reset my password' vs 'Reset my router'
+threshold 0.7: 1/2 correct hits, 1 wrong hits
+threshold 0.8: 0/2 correct hits, 1 wrong hits
+threshold 0.9: 0/2 correct hits, 1 wrong hits</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langchain_core/vectorstores/utils.py (cosine similarity)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import math
 <span class="c"># Toy embedding: count words after mapping synonyms to the same meaning (a real system uses a model).</span>
 MEANING = {&quot;refund&quot;: &quot;refund&quot;, &quot;money&quot;: &quot;refund&quot;, &quot;back&quot;: &quot;refund&quot;, &quot;ship&quot;: &quot;ship&quot;, &quot;arrive&quot;: &quot;ship&quot;,
@@ -99,15 +168,17 @@ for q in [&quot;How do I get a refund?&quot;, &quot;How can I get my money back?
     ask(q)
 print(&quot;the last hit is WRONG: same words, opposite meaning - test thresholds on real traffic&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">MISS 0.00 'How do I get a refund?' -> called the LLM
 HIT  1.00 'How can I get my money back?' -> reuse the answer to 'How do I get a refund?'
 MISS 0.00 'When will my order arrive?' -> called the LLM
 MISS 0.00 'Cancel my subscription' -> called the LLM
 HIT  1.00 'Do not cancel my subscription' -> reuse the answer to 'Cancel my subscription'
 the last hit is WRONG: same words, opposite meaning - test thresholds on real traffic</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Log the best similarity score for every lookup, hit or miss; plot them to pick a threshold instead of guessing.</li><li>Review a sample of cache hits by hand: look for near-miss pairs with opposite meaning (&quot;cancel&quot; vs &quot;do not cancel&quot;).</li><li>Libraries such as GPTCache and Redis-based semantic caches (also integrated in LangChain) expose the threshold and the stored question for each hit.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="llm-gateway.html">

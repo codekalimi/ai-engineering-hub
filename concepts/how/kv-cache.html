@@ -26,7 +26,7 @@
         <span class="eyebrow">Inside the LLM · 4 of 8</span>
         <h1>How does the KV cache work?</h1>
         <p class="tldr"><span class="label">In one line</span>Keys and values for tokens already processed are stored, so each new token only computes its own and reads the rest from the cache.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-kvcache">
@@ -59,11 +59,67 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Size ≈ 2 × layers × KV heads × head dim × bytes × tokens: about 0.3 MB per token for a 70B GQA model in FP16.</li><li>The cache, not the weights, usually limits how many requests fit on a GPU at once.</li><li>Prompt (prefix) caching reuses the cached keys and values of an identical prefix across requests.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">The cache is on by default; you mostly feel it as speed. Here a real 0.5B model generates the same 30 tokens with and without it.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import time
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+name = &quot;Qwen/Qwen2.5-0.5B-Instruct&quot;
+tok = AutoTokenizer.from_pretrained(name)
+model = AutoModelForCausalLM.from_pretrained(name)
+inputs = tok(&quot;Write a short poem about the sea.&quot;, return_tensors=&quot;pt&quot;)
+
+for use_cache in (True, False):
+    start = time.time()
+    model.generate(**inputs, max_new_tokens=30, do_sample=False, use_cache=use_cache)
+    print(f&quot;use_cache={use_cache}: {time.time() - start:.1f}s&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">use_cache=True: 0.6s
+use_cache=False: 3.9s</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">Looking inside the cache object the model fills: one key and value tensor per layer, growing by one position per generated token.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
+
+name = &quot;Qwen/Qwen2.5-0.5B-Instruct&quot;
+tok = AutoTokenizer.from_pretrained(name)
+model = AutoModelForCausalLM.from_pretrained(name).eval()
+ids = tok(&quot;The capital of France is&quot;, return_tensors=&quot;pt&quot;).input_ids
+
+cache = DynamicCache()
+with torch.no_grad():
+    out = model(input_ids=ids, cache=cache, use_cache=True)      <span class="c"># <b>Step 1</b>: prefill the whole prompt</span>
+    print(&quot;after prefill:&quot;, cache.get_seq_length(), &quot;tokens cached in&quot;, len(cache.layers), &quot;layers&quot;)
+    print(&quot;layer 0 keys [batch, kv_heads, tokens, head_dim]:&quot;, tuple(cache.layers[0].keys.shape))
+    for _ in range(3):
+        nxt = out.logits[:, -1:].argmax(-1)                      <span class="c"># <b>Step 2</b>: only the newest token goes in</span>
+        out = model(input_ids=nxt, cache=cache, use_cache=True)  <span class="c"># <b>Step 3</b>: it attends over the cache</span>
+        print(f&quot;decode {tok.decode(nxt[0])!r:9} input length {nxt.shape[1]} -> cache {cache.get_seq_length()}&quot;)  <span class="c"># <b>Step 4</b></span>
+
+cfg = model.config
+head_dim = cfg.hidden_size // cfg.num_attention_heads
+per_token = 2 * cfg.num_hidden_layers * cfg.num_key_value_heads * head_dim * 2   <span class="c"># K+V, 2 bytes each</span>
+print(f&quot;{per_token / 1024:.0f} KB per token -> {per_token * 32768 / 1e9:.2f} GB for one 32k-token context&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0, transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">after prefill: 5 tokens cached in 24 layers
+layer 0 keys [batch, kv_heads, tokens, head_dim]: (1, 2, 5, 64)
+decode ' Paris'  input length 1 -> cache 6
+decode '.'       input length 1 -> cache 7
+decode ' It'     input length 1 -> cache 8
+12 KB per token -> 0.40 GB for one 32k-token context</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>transformers/cache_utils.py (DynamicCache)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Count the work with and without a KV cache. &quot;Work&quot; = how many tokens get K and V computed.</span>
 prompt = [&quot;The&quot;, &quot;capital&quot;, &quot;of&quot;, &quot;France&quot;, &quot;is&quot;]
 new_tokens = [&quot;Paris&quot;, &quot;,&quot;, &quot;a&quot;, &quot;city&quot;]
@@ -96,6 +152,7 @@ layers, kv_heads, head_dim, fp16 = 80, 8, 128, 2
 per_token = 2 * layers * kv_heads * head_dim * fp16
 print(f&quot;70B-style model: {per_token / 1e6:.2f} MB per token, {per_token * 8192 / 1e9:.1f} GB for one 8k context&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">prefill: cached 5 tokens
 decode 'Paris'  reads 5 cached K/V, computes 1, cache now 6
 decode ','      reads 6 cached K/V, computes 1, cache now 7
@@ -103,9 +160,10 @@ decode 'a'      reads 7 cached K/V, computes 1, cache now 8
 decode 'city'   reads 8 cached K/V, computes 1, cache now 9
 K/V computations without cache: 26, with cache: 9
 70B-style model: 0.33 MB per token, 2.7 GB for one 8k context</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Hugging Face: <code>out = model(**inputs, use_cache=True)</code> returns <code>out.past_key_values</code>; pass it back with the next token to skip recomputing the prefix.</li><li>Time <code>model.generate(..., use_cache=False)</code> against the default: generation gets much slower as the output grows.</li><li>vLLM prints the KV-cache size (in tokens) at startup and exposes KV-cache usage on its <code>/metrics</code> endpoint.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="attention.html">

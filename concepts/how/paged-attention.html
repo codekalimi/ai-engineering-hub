@@ -26,7 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 3 of 10</span>
         <h1>How does PagedAttention work?</h1>
         <p class="tldr"><span class="label">In one line</span>The KV cache is stored in small fixed-size blocks, like operating-system memory pages, allocated only as a sequence grows, so almost no memory is wasted.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-paged-attention">
@@ -59,11 +59,72 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Near-zero waste means bigger batches and higher throughput on the same GPU.</li><li>It's the core idea behind vLLM.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">You don't call PagedAttention; you size it. These vLLM settings decide how much GPU memory becomes KV-cache blocks and whether prefixes are shared.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from vllm import LLM
+
+llm = LLM(
+    model=&quot;Qwen/Qwen2.5-7B-Instruct&quot;,
+    gpu_memory_utilization=0.90,     <span class="c"># weights + activations first; the rest becomes KV-cache blocks</span>
+    max_model_len=8192,              <span class="c"># longest sequence one request may reach</span>
+    block_size=16,                   <span class="c"># tokens per KV block (a &quot;page&quot;)</span>
+    enable_prefix_caching=True,      <span class="c"># requests with the same prefix share blocks</span>
+)
+<span class="c"># The startup log reports the resulting KV-cache size in tokens and the maximum concurrency.</span>
+</pre></div>
+        <p class="lv-test checked"><b>Checked, not run:</b> needs NVIDIA GPUs and vLLM, which can't be installed on the test machine (a Mac): syntax checked only.</p>
+        
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What the paged kernel does, in PyTorch: KV vectors live in a pool of fixed-size blocks anywhere in memory; a block table says which blocks belong to a sequence; attention gathers through it. The result equals ordinary attention.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+block_size, num_blocks, heads, dim = 4, 16, 2, 8
+k_pool = torch.zeros(num_blocks, block_size, heads, dim)     <span class="c"># <b>Step 3</b>: one big pool of blocks</span>
+v_pool = torch.zeros(num_blocks, block_size, heads, dim)
+free = list(range(num_blocks))[::-1]
+block_table = {}                                             <span class="c"># <b>Step 4</b>: sequence -> its physical blocks</span>
+
+def append(seq, k, v, pos):
+    if pos % block_size == 0:                                <span class="c"># new block only when the last is full</span>
+        block_table.setdefault(seq, []).append(free.pop())
+    b = block_table[seq][pos // block_size]
+    k_pool[b, pos % block_size], v_pool[b, pos % block_size] = k, v
+
+seq_len = 10
+K, V = torch.randn(seq_len, heads, dim), torch.randn(seq_len, heads, dim)
+for pos in range(seq_len):
+    append(&quot;req-A&quot;, K[pos], V[pos], pos)
+print(&quot;req-A block table:&quot;, block_table[&quot;req-A&quot;], f&quot;({seq_len} tokens in {len(block_table['req-A'])} blocks)&quot;)
+
+<span class="c"># attention for the newest query, gathering K/V through the block table</span>
+q = torch.randn(heads, dim)
+blocks = block_table[&quot;req-A&quot;]
+k_seq = k_pool[blocks].reshape(-1, heads, dim)[:seq_len]
+v_seq = v_pool[blocks].reshape(-1, heads, dim)[:seq_len]
+paged = F.scaled_dot_product_attention(q[:, None], k_seq.transpose(0, 1), v_seq.transpose(0, 1))
+dense = F.scaled_dot_product_attention(q[:, None], K.transpose(0, 1), V.transpose(0, 1))
+print(&quot;paged result equals contiguous attention:&quot;, torch.allclose(paged, dense, atol=1e-6))
+
+block_table[&quot;req-B&quot;] = blocks[:2]                            <span class="c"># <b>Step 5</b>: same prefix -> share blocks, no copy</span>
+print(&quot;req-B shares blocks&quot;, block_table[&quot;req-B&quot;], &quot;with req-A&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">req-A block table: [0, 1, 2] (10 tokens in 3 blocks)
+paged result equals contiguous attention: True
+req-B shares blocks [0, 1] with req-A</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>vllm/attention/ (paged attention backends)</code> · <code>vllm/v1/core/kv_cache_manager.py</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># KV cache in fixed-size blocks that can sit anywhere in GPU memory, plus a block table per sequence.</span>
 BLOCK = 4                                        <span class="c"># tokens per block</span>
 free_blocks = list(range(10))                    <span class="c"># physical blocks on the GPU</span>
@@ -97,13 +158,15 @@ print(f&quot;paged: {len(tables['req1']) + len(tables['req2'])} blocks = {(len(t
 <span class="c"># <b>Step 1-2</b>: the old way reserved the maximum length for every request up front</span>
 print(f&quot;old way: 2 requests x 2048 max tokens = 4096 slots reserved for {used} tokens&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">block tables (logical -> physical): {'req1': [0, 1], 'req2': [2], 'req1-sample2': [0, 1]}
 blocks shared by more than one sequence: [0, 1]
 paged: 3 blocks = 12 slots for 9 tokens
 old way: 2 requests x 2048 max tokens = 4096 slots reserved for 9 tokens</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>vLLM’s startup log reports the KV-cache size it allocated (as tokens/blocks); change <code>--gpu-memory-utilization</code> or <code>--max-model-len</code> and see it change.</li><li>Read <code>vllm/core/block_manager</code> (older versions) or the KV-cache manager in the v1 engine: block tables like the one below, mapping each sequence to physical blocks.</li><li>Turn prefix caching on (<code>--enable-prefix-caching</code>, the default in recent versions) and send many requests with the same long system prompt: KV-cache usage grows far less than the request count.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="continuous-batching.html">

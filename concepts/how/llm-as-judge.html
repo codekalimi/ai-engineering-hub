@@ -26,7 +26,7 @@
         <span class="eyebrow">Quality, safety &amp; operations · 2 of 6</span>
         <h1>How does LLM-as-a-judge work?</h1>
         <p class="tldr"><span class="label">In one line</span>A strong model is given the question, the answer and a rubric (and sometimes a reference answer), and returns a structured verdict with a reason; it's checked against human labels before you trust it.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-llm-judge">
@@ -55,11 +55,65 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Known biases: preferring the first option, longer answers, or its own style.</li><li>For A/B comparisons, run both orders and average.</li><li>Yes/no criteria are more reliable than 1–10 scales.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">A judge is a model call with a narrow rubric and structured output. Use a different (often cheaper) model than the one being judged.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from pydantic import BaseModel, Field
+from langchain.chat_models import init_chat_model
+
+class Grade(BaseModel):
+    reason: str = Field(description=&quot;One sentence, written before deciding&quot;)
+    supported: bool = Field(description=&quot;True only if EVERY claim is supported by the context&quot;)
+
+judge = init_chat_model(&quot;anthropic:claude-sonnet-5-5&quot;).with_structured_output(Grade)
+RUBRIC = &quot;You grade answers for faithfulness. Check each claim in the answer against the context.&quot;
+
+grade = judge.invoke([
+    (&quot;system&quot;, RUBRIC),
+    (&quot;human&quot;, &quot;Context: Refunds are accepted within 30 days.\nQuestion: Refund window?\nAnswer: You have 60 days.&quot;),
+])
+print(grade)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">reason='60 days is not in the context, which says 30.' supported=False</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">Before trusting a judge: measure its agreement with human labels (and Cohen's kappa, which corrects for chance), and test for position bias by swapping the order in pairwise comparisons.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from typing import Literal
+
+from pydantic import BaseModel
+from langchain.chat_models import init_chat_model
+
+human = [1, 0, 0, 1, 1, 0, 1, 1, 0, 1]     <span class="c"># <b>Step 4</b>: human labels on a sample</span>
+judge = [1, 0, 1, 1, 1, 0, 1, 0, 0, 1]     <span class="c"># the judge's scores on the same answers</span>
+n = len(human)
+agree = sum(h == j for h, j in zip(human, judge)) / n
+p_yes = (sum(human) / n) * (sum(judge) / n) + (1 - sum(human) / n) * (1 - sum(judge) / n)
+kappa = (agree - p_yes) / (1 - p_yes)       <span class="c"># agreement beyond what chance would give</span>
+print(f&quot;agreement {agree:.0%}, Cohen's kappa {kappa:.2f}&quot;)
+
+class Choice(BaseModel):
+    better: Literal[&quot;A&quot;, &quot;B&quot;]
+
+pairwise = init_chat_model(&quot;anthropic:claude-sonnet-5-5&quot;).with_structured_output(Choice)
+short, detailed = &quot;Refunds take 5 days.&quot;, &quot;Refunds take 5 working days and go back to your original card.&quot;
+first = pairwise.invoke(f&quot;Which answer is better?\nA: {short}\nB: {detailed}&quot;).better
+swapped = pairwise.invoke(f&quot;Which answer is better?\nA: {detailed}\nB: {short}&quot;).better
+consistent = (first == &quot;A&quot;) == (swapped == &quot;B&quot;)
+print(f&quot;original order -> {first}, swapped order -> {swapped}: {'consistent' if consistent else 'POSITION BIAS'}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">agreement 80%, Cohen's kappa 0.58
+original order -> A, swapped order -> A: POSITION BIAS</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>Paper: 'Judging LLM-as-a-Judge' (Zheng et al., 2023)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import json
 
 <span class="c"># <b>Step 1</b>: a narrow, checkable rubric</span>
@@ -92,14 +146,16 @@ for q, ctx, ans, human in cases:
 <span class="c"># <b>Step 4</b>: check agreement with human labels before trusting the judge</span>
 print(f&quot;judge agrees with humans on {agree}/{len(cases)}&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">'You have 30 days.'                    judge=1 human=1  all claims supported
 'You have 60 days.'                    judge=0 human=0  not in context: ['60']
 '2 years, and 5 years for batteries.'  judge=0 human=0  not in context: ['5']
 'Two years.'                           judge=1 human=1  all claims supported
 judge agrees with humans on 4/4</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Print the judge’s full reasoning for 20 cases and grade those cases yourself; agreement below about 80% means the rubric needs work.</li><li>Swap the order of two answers in a pairwise comparison and re-run: if the verdict flips, the judge has position bias.</li><li>Ask for structured output (score plus reason) so judge results can be aggregated and audited.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="eval-pipeline.html">

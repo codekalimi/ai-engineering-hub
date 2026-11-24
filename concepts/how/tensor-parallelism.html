@@ -26,7 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 6 of 10</span>
         <h1>How does tensor parallelism split a model across GPUs?</h1>
         <p class="tldr"><span class="label">In one line</span>Each layer's weight matrices are split across GPUs; every GPU computes its slice in parallel, and the partial results are combined over a fast link before the next layer.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-tensor-parallel">
@@ -63,11 +63,55 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Use it when the model doesn't fit on one GPU or you need lower latency.</li><li>It needs very fast interconnect, so it's usually kept within one node.</li><li>Pipeline parallelism (layers on different GPUs) is used across nodes instead.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Split a model too big for one GPU across several in the same node. One argument (or --tensor-parallel-size on the CLI).</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from vllm import LLM, SamplingParams
+
+llm = LLM(model=&quot;Qwen/Qwen2.5-72B-Instruct&quot;, tensor_parallel_size=4)   <span class="c"># 4 GPUs in one NVLink node</span>
+print(llm.generate([&quot;Hello&quot;], SamplingParams(max_tokens=20))[0].outputs[0].text)
+<span class="c"># Across nodes, combine with pipeline parallelism: pipeline_parallel_size=2</span>
+</pre></div>
+        <p class="lv-test checked"><b>Checked, not run:</b> needs NVIDIA GPUs and vLLM, which can't be installed on the test machine (a Mac): syntax checked only.</p>
+        
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">Tensor parallelism with real collectives: two processes (CPU stand-ins for GPUs) each hold half of a layer's weights, compute their slice, and all-gather. The gloo backend plays the role NCCL plays on GPUs.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import os
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+def worker(rank, world_size, W, x):
+    os.environ.update(MASTER_ADDR=&quot;127.0.0.1&quot;, MASTER_PORT=&quot;29511&quot;)
+    dist.init_process_group(&quot;gloo&quot;, rank=rank, world_size=world_size)
+    shard = W.chunk(world_size, dim=0)[rank]                <span class="c"># <b>Step 1</b>: this GPU's rows of the weight</span>
+    partial = x @ shard.T                                   <span class="c"># <b>Step 2</b>: same input, own slice</span>
+    pieces = [torch.empty_like(partial) for _ in range(world_size)]
+    dist.all_gather(pieces, partial)                        <span class="c"># <b>Step 3</b>: exchange the slices</span>
+    full = torch.cat(pieces, dim=-1)
+    if rank == 0:
+        print(f&quot;rank 0 holds {tuple(shard.shape)} of {tuple(W.shape)} weights&quot;)
+        print(&quot;all-gathered output equals single-device result:&quot;, torch.allclose(full, x @ W.T, atol=1e-6))
+    dist.destroy_process_group()
+
+if __name__ == &quot;__main__&quot;:
+    torch.manual_seed(0)
+    W, x = torch.randn(8, 6), torch.randn(2, 6)
+    mp.spawn(worker, args=(2, W, x), nprocs=2)              <span class="c"># <b>Step 4</b>: every layer does this, every token</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">rank 0 holds (4, 6) of (8, 6) weights
+all-gathered output equals single-device result: True</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>torch/distributed/distributed_c10d.py (all_gather)</code> · <code>vllm/distributed/parallel_state.py</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># y = W x for one layer, computed on 1 GPU, then split across 2 &quot;GPUs&quot;.</span>
 W = [[1, 2, 0, 1],
      [0, 1, 3, 1],
@@ -91,13 +135,15 @@ p0, p1 = matvec(W0, x[:2]), matvec(W1, x[2:])
 print(&quot;partial sums:&quot;, p0, p1, &quot;-> all-reduce:&quot;, [a + b for a, b in zip(p0, p1)])
 <span class="c"># <b>Step 4</b>: this happens in every layer, so GPUs talk constantly - keep tensor parallelism inside one node</span>
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">single GPU:       [9, 15, 5, 10]
 gpu0: [9, 15]  gpu1: [5, 10]
 all-gather:       [9, 15, 5, 10]
 partial sums: [5, 2, 2, 3] [4, 13, 3, 7] -> all-reduce: [9, 15, 5, 10]</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>vLLM: <code>vllm serve &lt;model> --tensor-parallel-size 2</code>, then <code>nvidia-smi</code> shows the weights split across both GPUs, each using about half the weight memory.</li><li><code>nvidia-smi topo -m</code> shows how GPUs are connected (NVLink vs PCIe); tensor parallelism needs the fast links.</li><li>Set <code>NCCL_DEBUG=INFO</code> to see the communication library set up the all-reduce/all-gather channels at startup.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="speculative-decoding.html">

@@ -16,12 +16,15 @@ const esc = R.esc;
 const ctx = { window: {} };
 vm.createContext(ctx);
 const DATA_FILES = ["how-it-works-data.js", "how-it-works-data-2.js", "how-meta.js",
-  "how-internals-1.js", "how-internals-2.js", "how-internals-3.js", "how-internals-output.js"];
+  "how-internals-1.js", "how-internals-2.js", "how-internals-3.js", "how-internals-output.js",
+  "how-levels-1.js", "how-levels-2.js", "how-levels-3.js", "how-levels-output.js"];
 for (const f of DATA_FILES) {
+  if (!fs.existsSync(path.join(__dirname, f))) { console.warn(`(missing ${f})`); continue; }
   vm.runInContext(fs.readFileSync(path.join(__dirname, f), "utf8"), ctx, { filename: f });
 }
 const { HOW, HOW_META: META } = ctx.window;
 const BTS = ctx.window.HOW_INTERNALS || {}, BTS_OUT = ctx.window.HOW_INTERNALS_OUTPUT || {};
+const LV = ctx.window.HOW_LEVELS || {}, LV_OUT = ctx.window.HOW_LEVELS_OUTPUT || { results: {}, versions: {} };
 
 // ---- Check the data before writing anything ----
 const errors = [];
@@ -46,6 +49,11 @@ const noBts = HOW.items.filter((it) => !BTS[it.id]).map((it) => it.id);
 const noOut = HOW.items.filter((it) => BTS[it.id] && !BTS_OUT[it.id]).map((it) => it.id);
 if (noBts.length) console.warn(`No "Behind the scenes" program yet for: ${noBts.join(", ")}`);
 if (noOut.length) console.warn(`Output missing (run node concepts/run-internals.js) for: ${noOut.join(", ")}`);
+for (const id of Object.keys(LV)) if (!byId.has(id)) errors.push(`how-levels: "${id}" has no explanation`);
+const noLv = HOW.items.filter((it) => !(LV[it.id] && LV[it.id].use && LV[it.id].under)).map((it) => it.id);
+const untested = HOW.items.filter((it) => LV[it.id] && ["use", "under"].some((l) => LV[it.id][l] && !(LV_OUT.results[it.id] || {})[l])).map((it) => it.id);
+if (noLv.length) console.warn(`Level 1/2 code missing for: ${noLv.join(", ")}`);
+if (untested.length) console.warn(`Level 1/2 not tested yet (run node concepts/run-levels.js) for: ${untested.join(", ")}`);
 if (errors.length) { console.error("Not generated:\n  " + errors.join("\n  ")); process.exit(1); }
 
 // Reading order: by category, then the order in the data files
@@ -103,7 +111,7 @@ function page(it, i) {
         <span class="eyebrow">${esc(cat.title)} · ${pos} of ${inCat.length}</span>
         <h1>${esc(it.q)}</h1>
         <p class="tldr"><span class="label">In one line</span>${esc(it.tldr)}</p>
-        ${BTS[it.id] ? `<p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>` : ""}
+        ${BTS[it.id] ? `<p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>` : ""}
       </header>
 
       <article class="hw hw-page" id="${it.id}">
@@ -115,7 +123,8 @@ function page(it, i) {
         ${R.body(it)}
       </article>
 
-      ${R.behind(BTS[it.id], BTS_OUT[it.id], { guide: "../behind-the-scenes.html" })}
+      ${R.codeLevels({ levels: LV[it.id], levelsOut: LV_OUT.results[it.id], versions: LV_OUT.versions, bts: BTS[it.id], btsOut: BTS_OUT[it.id] },
+                     { guide: "../behind-the-scenes.html" })}
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         ${pn(prev, "prev")}

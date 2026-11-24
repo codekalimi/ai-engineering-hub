@@ -26,7 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 7 of 10</span>
         <h1>How does prompt caching work?</h1>
         <p class="tldr"><span class="label">In one line</span>When requests start with the same long prefix, the provider keeps the computed KV cache for that prefix, so later requests skip that work and cost less.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-prompt-caching">
@@ -59,11 +59,73 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Put stable content first (instructions, tools, documents) and variable content last.</li><li>Any change early in the prompt (even a timestamp) breaks the match for everything after it.</li><li>Some providers cache automatically; others need explicit cache markers.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Mark the long, unchanging part as cacheable; later requests that start with the same bytes read it from cache. The usage fields show whether it worked.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import anthropic
+
+client = anthropic.Anthropic()
+POLICY = open(&quot;policy.md&quot;).read()               <span class="c"># a long, stable document (keep timestamps out of it)</span>
+
+def ask(question):
+    return client.beta.messages.create(
+        model=&quot;claude-opus-5-5&quot;,
+        max_tokens=16000,
+        cache_control={&quot;type&quot;: &quot;ephemeral&quot;},    <span class="c"># cache everything up to the last cacheable block</span>
+        system=[{&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;Answer from this policy:\n&quot; + POLICY}],
+        messages=[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: question}],
+        betas=[&quot;server-side-fallback-2026-07-01&quot;],
+        fallbacks=&quot;default&quot;,
+    )
+
+for q in [&quot;Where is my order?&quot;, &quot;How do refunds work?&quot;]:
+    u = ask(q).usage
+    print(f&quot;{q!r:22} written to cache {u.cache_creation_input_tokens:5}, read from cache {u.cache_read_input_tokens:5}, uncached {u.input_tokens}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with anthropic 2.13.0 · with a mocked Anthropic HTTP endpoint (the real SDK validated the request).</p>
+        <span class="label">What it printed</span><pre class="bts-out">'Where is my order?'   written to cache  5200, read from cache     0, uncached 12
+'How do refunds work?' written to cache     0, read from cache  5200, uncached 14</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What the provider keeps: the KV cache of the prefix. Here a real model computes it once, then answers two questions by processing only their new tokens - with the same result as processing everything.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import copy
+import time
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
+
+name = &quot;Qwen/Qwen2.5-0.5B-Instruct&quot;
+tok = AutoTokenizer.from_pretrained(name)
+model = AutoModelForCausalLM.from_pretrained(name, dtype=torch.float32).eval()   <span class="c"># float32: exact comparison</span>
+prefix = tok(&quot;You are a support bot. Policy: &quot; + &quot;Refunds within 30 days. &quot; * 60, return_tensors=&quot;pt&quot;).input_ids
+
+with torch.no_grad():
+    start = time.time()
+    prefix_cache = model(prefix, cache=DynamicCache(), use_cache=True).cache     <span class="c"># <b>Steps 1-2</b>: compute once, keep</span>
+    print(f&quot;prefix: {prefix.shape[1]} tokens cached in {time.time() - start:.2f}s&quot;)
+    for q in [&quot;Question: can I get a refund?&quot;, &quot;Question: how long do I have?&quot;]:
+        q_ids = tok(q, add_special_tokens=False, return_tensors=&quot;pt&quot;).input_ids
+        start = time.time()
+        full = model(torch.cat([prefix, q_ids], dim=1)).logits[0, -1]            <span class="c"># no cache: everything</span>
+        t_full = time.time() - start
+        start = time.time()
+        cached = model(q_ids, cache=copy.deepcopy(prefix_cache)).logits[0, -1]   <span class="c"># <b>Steps 3-4</b>: only new tokens</span>
+        t_cached = time.time() - start
+        same = torch.allclose(full, cached, atol=1e-3)
+        print(f&quot;{q!r}: full {t_full:.2f}s vs cached {t_cached:.2f}s ({q_ids.shape[1]} new tokens), same answer: {same}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0, transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">prefix: 489 tokens cached in 0.57s
+'Question: can I get a refund?': full 0.62s vs cached 0.11s (8 new tokens), same answer: True
+'Question: how long do I have?': full 0.41s vs cached 0.08s (8 new tokens), same answer: True</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>vllm/v1/core/kv_cache_manager.py (prefix caching)</code> · <code>transformers/cache_utils.py</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A provider-side prefix cache: the KV cache for a prompt prefix is kept, keyed by its exact tokens.</span>
 import hashlib
 cache = {}
@@ -88,12 +150,14 @@ request(SYSTEM + &quot;Question: how do refunds work?&quot;, n)
 <span class="c"># change ONE early token and the prefix no longer matches</span>
 request(&quot;You are a SUPPORT bot. &quot; + &quot;policy &quot; * 2000 + &quot;Question: hi&quot;, n)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">MISS key a41a024f8a: processed 2010 tokens, reused 0
 HIT  key a41a024f8a: processed    5 tokens, reused 2005
 MISS key 3b83cc0d6c: processed 2007 tokens, reused 0</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Anthropic: mark the stable prefix with <code>cache_control</code>; the response’s <code>usage</code> shows <code>cache_creation_input_tokens</code> on the first call and <code>cache_read_input_tokens</code> on later ones.</li><li>OpenAI-style APIs report cached tokens in <code>usage.prompt_tokens_details.cached_tokens</code> (automatic above a minimum prompt length).</li><li>Change one character near the start of the prompt (a timestamp, a user name) and watch the cache hits drop to zero: keep the variable parts at the end.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="tensor-parallelism.html">

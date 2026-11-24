@@ -26,7 +26,7 @@
         <span class="eyebrow">Inside the LLM · 8 of 8</span>
         <h1>How does structured output (JSON mode, constrained decoding) work?</h1>
         <p class="tldr"><span class="label">In one line</span>Either the model is trained to emit schema-shaped JSON (as in tool calling), or the server restricts which tokens may be chosen at each step so the output must match your schema.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-structured">
@@ -55,11 +55,70 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Provider structured-output modes and tool calling build on this; LangChain's with_structured_output chooses the right mechanism.</li><li>Valid structure doesn't mean correct content. Still validate the values.</li><li>Open-source servers implement it with libraries such as Outlines or XGrammar.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Describe the shape you want as a Pydantic class; you get a validated object back, not text to parse.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from typing import Literal
+
+from pydantic import BaseModel, Field
+from langchain.chat_models import init_chat_model
+
+class Ticket(BaseModel):
+    category: Literal[&quot;billing&quot;, &quot;technical&quot;, &quot;other&quot;]
+    urgent: bool
+    summary: str = Field(description=&quot;One sentence&quot;)
+
+model = init_chat_model(&quot;anthropic:claude-opus-5-5&quot;)
+extractor = model.with_structured_output(Ticket)
+ticket = extractor.invoke(&quot;My card was charged twice and I need this fixed today!&quot;)
+print(type(ticket).__name__, ticket.model_dump())
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">Ticket {'category': 'billing', 'urgent': True, 'summary': 'Customer was charged twice and needs a fix today.'}</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What with_structured_output does: your class becomes a JSON schema sent as a tool, the model's tool call is parsed and validated. With strict tools or structured-output mode the server also constrains the tokens (Steps 2-3).</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import json
+from typing import Literal
+
+from pydantic import BaseModel, ValidationError
+from langchain.chat_models import init_chat_model
+from langchain_core.output_parsers.openai_tools import PydanticToolsParser
+from langchain_core.utils.function_calling import convert_to_openai_tool
+
+class Ticket(BaseModel):
+    category: Literal[&quot;billing&quot;, &quot;technical&quot;, &quot;other&quot;]
+    urgent: bool
+    summary: str
+
+schema = convert_to_openai_tool(Ticket)[&quot;function&quot;][&quot;parameters&quot;]     <span class="c"># <b>Step 1</b>: class -> JSON schema</span>
+print(&quot;schema sent:&quot;, json.dumps(schema))
+
+model = init_chat_model(&quot;anthropic:claude-opus-5-5&quot;).bind_tools([Ticket])
+ai = model.invoke(&quot;My card was charged twice and I need this fixed today!&quot;)
+print(&quot;model returned a tool call:&quot;, ai.tool_calls[0][&quot;args&quot;])
+
+ticket = PydanticToolsParser(tools=[Ticket], first_tool_only=True).invoke(ai)   <span class="c"># parse + validate</span>
+print(&quot;parsed:&quot;, repr(ticket))
+try:
+    Ticket(category=&quot;refund&quot;, urgent=&quot;maybe&quot;, summary=&quot;x&quot;)             <span class="c"># what validation catches</span>
+except ValidationError as err:
+    print(&quot;rejected:&quot;, err.error_count(), &quot;errors&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langchain-core 1.8.4 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">schema sent: {&quot;properties&quot;: {&quot;category&quot;: {&quot;enum&quot;: [&quot;billing&quot;, &quot;technical&quot;, &quot;other&quot;], &quot;type&quot;: &quot;string&quot;}, &quot;urgent&quot;: {&quot;type&quot;: &quot;boolean&quot;}, &quot;summary&quot;: {&quot;type&quot;: &quot;string&quot;}}, &quot;required&quot;: [&quot;category&quot;, &quot;urgent&quot;, &quot;summary&quot;], &quot;type&quot;: &quot;object&quot;}
+model returned a tool call: {'category': 'billing', 'urgent': True, 'summary': 'Charged twice.'}
+parsed: Ticket(category='billing', urgent=True, summary='Charged twice.')
+rejected: 2 errors</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langchain_core/language_models/chat_models.py (with_structured_output)</code> · <code>langchain_core/output_parsers/openai_tools.py</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Constrained generation masks out every token the schema does not allow, before each pick.</span>
 import json, random
 random.seed(0)
@@ -88,15 +147,17 @@ while len(out) &lt; len(GRAMMAR):
 text = &quot;&quot;.join(out)
 print(&quot;output:&quot;, text, &quot;->&quot;, json.loads(text))
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">model wanted Sure!        allowed ['{'] -> {
 model wanted Sure!        allowed ['&quot;sentiment&quot;'] -> &quot;sentiment&quot;
 model wanted Sure!        allowed [':'] -> :
 model wanted Sure!        allowed ['&quot;pos&quot;', '&quot;neg&quot;'] -> &quot;neg&quot;
 model wanted Sure!        allowed ['}'] -> }
 output: {&quot;sentiment&quot;:&quot;neg&quot;} -> {'sentiment': 'neg'}</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>LangChain: <code>model.with_structured_output(MySchema, include_raw=True)</code> returns the raw message, the parsed object and any parsing error, so you see what came back.</li><li>Print <code>MySchema.model_json_schema()</code> (Pydantic) to see the JSON Schema that is sent to the API.</li><li>Self-hosted: vLLM and llama.cpp support grammar/JSON-schema guided decoding; compare output with and without it on a small model.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="reasoning-models.html">

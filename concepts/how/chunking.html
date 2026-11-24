@@ -26,7 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 6 of 9</span>
         <h1>How does recursive text splitting work?</h1>
         <p class="tldr"><span class="label">In one line</span>It splits on the biggest natural boundary first (paragraphs) and only falls back to smaller ones (lines, words, characters) for pieces that are still too big, then adds overlap.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-chunking">
@@ -55,11 +55,74 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Sizes are in characters unless you use a token-based length function.</li><li>Structure-aware splitters (markdown headings, code syntax) often do better.</li><li>Store the chunk's position and parent document ID, for citations and for expanding context later.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Split documents before embedding them. Keep metadata, and record where each chunk starts so citations can point back.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+doc = Document(
+    &quot;RAG systems split documents into chunks.\n\nEach chunk is embedded separately. Chunks that are too &quot;
+    &quot;big blur the meaning; chunks that are too small lose context.\n\nOverlap repeats a little text.&quot;,
+    metadata={&quot;source&quot;: &quot;guide.md&quot;},
+)
+splitter = RecursiveCharacterTextSplitter(chunk_size=80, chunk_overlap=20, add_start_index=True)
+for c in splitter.split_documents([doc]):
+    print(c.metadata, repr(c.page_content))
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain-core 1.8.4, langchain-text-splitters 1.2.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">{'source': 'guide.md', 'start_index': 0} 'RAG systems split documents into chunks.'
+{'source': 'guide.md', 'start_index': 42} 'Each chunk is embedded separately. Chunks that are too big blur the meaning;'
+{'source': 'guide.md', 'start_index': 101} 'blur the meaning; chunks that are too small lose context.'
+{'source': 'guide.md', 'start_index': 160} 'Overlap repeats a little text.'</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">The splitter's real knobs: its separator list (Step 1), language-aware separators for code, and measuring size in tokens instead of characters.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
+
+print(&quot;default separators:&quot;, RecursiveCharacterTextSplitter()._separators)           <span class="c"># <b>Step 1</b></span>
+print(&quot;python separators: &quot;, RecursiveCharacterTextSplitter.get_separators_for_language(Language.PYTHON)[:4])
+
+code = '''class Cart:
+    def add(self, item):
+        self.items.append(item)
+
+    def total(self):
+        return sum(i.price for i in self.items)
+
+def checkout(cart):
+    return cart.total()
+'''
+py = RecursiveCharacterTextSplitter.from_language(Language.PYTHON, chunk_size=90, chunk_overlap=0)
+for c in py.split_text(code):                                      <span class="c"># <b>Steps 2-4</b>: split at def/class first</span>
+    print(&quot;---\n&quot; + c)
+
+by_tokens = RecursiveCharacterTextSplitter.from_tiktoken_encoder(encoding_name=&quot;o200k_base&quot;, chunk_size=12, chunk_overlap=3)
+print([c for c in by_tokens.split_text(&quot;Chunk size can be measured in tokens, which is what the embedding model actually limits.&quot;)])
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain-text-splitters 1.2.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">default separators: ['\n\n', '\n', ' ', '']
+python separators:  ['\nclass ', '\ndef ', '\n\tdef ', '\n\n']
+---
+class Cart:
+    def add(self, item):
+        self.items.append(item)
+---
+def total(self):
+        return sum(i.price for i in self.items)
+---
+def checkout(cart):
+    return cart.total()
+['Chunk size can be measured in tokens, which is what the', 'is what the embedding model actually limits.']</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langchain_text_splitters/character.py (RecursiveCharacterTextSplitter._split_text)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A small version of LangChain's RecursiveCharacterTextSplitter.</span>
 text = (&quot;RAG systems split documents into chunks.\n\nEach chunk is embedded separately. &quot;
         &quot;Chunks that are too big blur the meaning; chunks that are too small lose context.\n\n&quot;
@@ -93,14 +156,16 @@ def add_overlap(chunks, n_words=3):
 for i, c in enumerate(add_overlap(split(text, 70)), 1):
     print(f&quot;chunk {i} ({len(c)} chars): {c!r}&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">chunk 1 (40 chars): 'RAG systems split documents into chunks.'
 chunk 2 (60 chars): 'documents into chunks. ... Each chunk is embedded separately'
 chunk 3 (94 chars): 'is embedded separately ... Chunks that are too big blur the meaning; chunks that are too small'
 chunk 4 (31 chars): 'are too small ... lose context.'
 chunk 5 (76 chars): 'lose context. ... Overlap repeats a little text between neighbouring chunks.'</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>LangChain: <code>RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=20).split_text(text)</code>; print each chunk with <code>len(chunk)</code> and look at where it cut.</li><li>Use <code>RecursiveCharacterTextSplitter.from_language(Language.PYTHON, ...)</code> for code: its separators are class and def boundaries.</li><li>Open 10 random chunks from your real index and ask: would a person understand this chunk on its own?</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="reranking.html">

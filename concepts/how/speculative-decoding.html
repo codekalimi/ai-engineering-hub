@@ -26,7 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 5 of 10</span>
         <h1>How does speculative decoding work?</h1>
         <p class="tldr"><span class="label">In one line</span>A small, fast model drafts several tokens ahead; the large model checks all of them in one pass and keeps the ones it agrees with, giving several tokens for the price of one big step.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-spec-decoding">
@@ -55,11 +55,79 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>The output is the same as the large model alone would produce; only speed changes.</li><li>The speed-up depends on how often the draft is right: high for predictable text like code.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Speculation in Hugging Face, no second model needed: prompt-lookup decoding drafts tokens by copying n-grams from the prompt. Great for code edits and extraction, where the output repeats the input. Same output, fewer forward passes of the big model (on a GPU, fewer passes means faster).</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from transformers import AutoModelForCausalLM, AutoTokenizer
+
+name = &quot;Qwen/Qwen2.5-0.5B-Instruct&quot;
+tok = AutoTokenizer.from_pretrained(name)
+model = AutoModelForCausalLM.from_pretrained(name)
+code = &quot;def total_price(items, tax_rate):\n    subtotal = sum(item.price * item.quantity for item in items)\n    return subtotal * (1 + tax_rate)&quot;
+prompt = tok.apply_chat_template([{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: f&quot;Rename the variable subtotal to net in this code. Reply with the code only.\n{code}&quot;}],
+                                 add_generation_prompt=True, return_tensors=&quot;pt&quot;)
+passes = 0
+def count(module, args, output):
+    global passes
+    passes += 1
+model.register_forward_hook(count)          <span class="c"># count full forward passes of the big model</span>
+
+for label, extra in [(&quot;normal&quot;, {}), (&quot;prompt lookup&quot;, {&quot;prompt_lookup_num_tokens&quot;: 10})]:
+    passes = 0
+    out = model.generate(**prompt, max_new_tokens=60, do_sample=False, **extra)
+    new = out[0, prompt[&quot;input_ids&quot;].shape[1]:]
+    print(f&quot;{label:13} {len(new)} tokens in {passes} forward passes&quot;)
+print(tok.decode(new, skip_special_tokens=True))      <span class="c"># identical output either way</span>
+<span class="c"># With a separate small draft model: model.generate(..., assistant_model=small_model)</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">normal        37 tokens in 37 forward passes
+prompt lookup 37 tokens in 9 forward passes
+```python
+def total_price(items, tax_rate):
+    subtotal = sum(item.price * item.quantity for item in items)
+    return subtotal * (1 + tax_rate)
+```</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">The verification step done by hand with a real model: one forward pass scores every drafted token; accept them up to the first disagreement, and take the model's own token there.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+name = &quot;Qwen/Qwen2.5-0.5B-Instruct&quot;
+tok = AutoTokenizer.from_pretrained(name)
+model = AutoModelForCausalLM.from_pretrained(name).eval()
+
+prefix = tok(&quot;The capital of France is&quot;, return_tensors=&quot;pt&quot;).input_ids
+draft_text = &quot; Paris. It is famous for the Louvre and pizza&quot;     <span class="c"># <b>Step 1</b>: a draft (from a small model or n-grams)</span>
+draft = tok(draft_text, add_special_tokens=False, return_tensors=&quot;pt&quot;).input_ids
+
+with torch.no_grad():                                            <span class="c"># <b>Step 2</b>: ONE pass over prefix + draft</span>
+    logits = model(torch.cat([prefix, draft], dim=1)).logits[0]
+start = prefix.shape[1] - 1
+model_picks = logits[start:start + draft.shape[1]].argmax(-1)    <span class="c"># what the big model would say at each spot</span>
+
+accepted = []
+for d, m in zip(draft[0].tolist(), model_picks.tolist()):        <span class="c"># <b>Step 3</b>: accept until first disagreement</span>
+    if d != m:
+        print(f&quot;draft {tok.decode(d)!r} rejected; model says {tok.decode(m)!r}&quot;)
+        accepted.append(m)                                       <span class="c"># <b>Step 4</b>: the model's token replaces it</span>
+        break
+    accepted.append(d)
+print(f&quot;{len(accepted)} tokens from one pass:&quot;, repr(tok.decode(accepted)))
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0, transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">draft ' famous' rejected; model says ' the'
+5 tokens from one pass: ' Paris. It is the'</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>transformers/generation/candidate_generator.py</code> · <code>transformers/generation/utils.py (_assisted_decoding)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import random
 random.seed(5)
 TARGET = &quot;the quick brown fox jumps over the lazy dog&quot;.split()
@@ -93,14 +161,16 @@ while len(out) &lt; len(TARGET):
     out += accepted
 print(f&quot;{len(out)} tokens in {big_passes} big-model passes (normal decoding needs {len(TARGET)})&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">pass 1: draft ['the', 'quick', 'cat', 'cat'] -> keep ['the', 'quick', 'brown']
 pass 2: draft ['fox', 'cat', 'over', 'the'] -> keep ['fox', 'jumps']
 pass 3: draft ['cat', 'the', 'cat', 'dog'] -> keep ['over']
 pass 4: draft ['the', 'lazy', 'dog'] -> keep ['the', 'lazy', 'dog']
 9 tokens in 4 big-model passes (normal decoding needs 9)</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>vLLM: configure a draft model or n-gram/EAGLE speculation (see the speculative decoding docs for your version) and compare tokens/second on the same prompts.</li><li>Watch the acceptance rate in its metrics/logs: high for predictable text (code, JSON, repeated content), low for creative writing.</li><li>Hugging Face: <code>model.generate(..., assistant_model=small_model)</code> enables assisted generation, the same idea.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="quantization.html">

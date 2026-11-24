@@ -26,7 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 4 of 10</span>
         <h1>How does quantization work?</h1>
         <p class="tldr"><span class="label">In one line</span>Weights are stored as small integers plus a scale factor per group, cutting memory 2–4×, and are converted back (or computed directly) at run time.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-quantization">
@@ -55,19 +55,65 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Methods like GPTQ and AWQ choose the rounding carefully to minimize the error on important weights.</li><li>8-bit is usually close to lossless; 4-bit saves more but can hurt quality, so check with evals.</li><li>The KV cache can be quantized too, which helps with long contexts.</li></ul></div>
         </div>
-        <pre>import numpy as np
-
-def quantize_int8(w):
-    scale = np.abs(w).max() / 127
-    q = np.round(w / scale).astype(np.int8)
-    return q, scale
-
-def dequantize(q, scale):
-    return q.astype(np.float32) * scale</pre>
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Load a model in 4 bits with one config object. NF4 with bfloat16 compute is the common choice for QLoRA and for fitting big models on small GPUs.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+
+config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type=&quot;nf4&quot;,               <span class="c"># 4-bit &quot;normal float&quot; levels, fitted to weight distributions</span>
+    bnb_4bit_compute_dtype=torch.bfloat16,   <span class="c"># weights are dequantized to bf16 inside each matmul</span>
+)
+model = AutoModelForCausalLM.from_pretrained(&quot;Qwen/Qwen2.5-7B-Instruct&quot;, quantization_config=config, device_map=&quot;auto&quot;)
+print(f&quot;{model.get_memory_footprint() / 1e9:.1f} GB in memory (about 15 GB in bf16)&quot;)
+</pre></div>
+        <p class="lv-test checked"><b>Checked, not run:</b> bitsandbytes 4-bit loading needs an NVIDIA GPU; syntax and imports were checked.</p>
+        
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">Group-wise int4 quantization of a real weight matrix from Qwen, by hand: the error it adds, and how small groups protect against outliers.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+from transformers import AutoModelForCausalLM
+
+model = AutoModelForCausalLM.from_pretrained(&quot;Qwen/Qwen2.5-0.5B-Instruct&quot;)
+W = model.model.layers[0].self_attn.q_proj.weight.detach().float()     <span class="c"># a real 896 x 896 weight</span>
+x = torch.randn(4, W.shape[1])
+
+def quantize(W, bits, group):
+    qmax = 2 ** (bits - 1) - 1
+    groups = W.reshape(-1, group)                                       <span class="c"># <b>Step 1</b>: groups of weights</span>
+    scale = groups.abs().amax(dim=1, keepdim=True) / qmax               <span class="c"># <b>Step 2</b>: one scale per group</span>
+    q = torch.clamp(torch.round(groups / scale), -qmax - 1, qmax)       <span class="c"># <b>Step 3</b>: round to integers</span>
+    return q.to(torch.int8), scale                                      <span class="c"># <b>Step 4</b>: store ints + scales</span>
+
+def dequantize(q, scale, shape):
+    return (q.float() * scale).reshape(shape)                           <span class="c"># <b>Step 5</b>: multiply back</span>
+
+print(f&quot;weight {tuple(W.shape)}, largest |w| {W.abs().max():.2f}, typical |w| {W.abs().mean():.3f}&quot;)
+for bits, group in [(8, 896), (4, 896), (4, 128), (4, 32)]:
+    q, s = quantize(W, bits, group)
+    W_hat = dequantize(q, s, W.shape)
+    err = ((x @ W_hat.T) - (x @ W.T)).abs().mean() / (x @ W.T).abs().mean()
+    size = W.numel() * bits / 8 + s.numel() * 2
+    print(f&quot;int{bits}, groups of {group:3}: output error {err:6.2%}, {size / 1e6:.2f} MB (bf16: {W.numel() * 2 / 1e6:.2f} MB)&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0, transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">weight (896, 896), largest |w| 1.23, typical |w| 0.042
+int8, groups of 896: output error  0.94%, 0.80 MB (bf16: 1.61 MB)
+int4, groups of 896: output error 17.33%, 0.40 MB (bf16: 1.61 MB)
+int4, groups of 128: output error 13.19%, 0.41 MB (bf16: 1.61 MB)
+int4, groups of  32: output error  9.89%, 0.45 MB (bf16: 1.61 MB)</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>bitsandbytes/functional.py (quantize_4bit)</code> · <code>Paper: GPTQ / AWQ for smarter rounding</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import random
 random.seed(4)
 
@@ -95,6 +141,7 @@ print(&quot;smaller groups contain the outlier's damage to fewer weights&quot;)
 for name, bytes_per_weight in [(&quot;FP16&quot;, 2), (&quot;INT8&quot;, 1), (&quot;INT4&quot;, 0.5)]:
     print(f&quot;70B model in {name}: {70e9 * bytes_per_weight / 1e9:.0f} GB of weights&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">int8, groups of 128: average error 0.00036
 int4, groups of 128: average error 0.00601
 int4, groups of  32: average error 0.00255
@@ -102,9 +149,10 @@ smaller groups contain the outlier's damage to fewer weights
 70B model in FP16: 140 GB of weights
 70B model in INT8: 70 GB of weights
 70B model in INT4: 35 GB of weights</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Hugging Face: load with <code>BitsAndBytesConfig(load_in_4bit=True)</code> and compare <code>model.get_memory_footprint()</code> with the 16-bit load.</li><li>Run the same eval set on the 16-bit and quantized versions; small accuracy drops are normal, big ones mean the method or bit-width is too aggressive for your task.</li><li>Read a quantized checkpoint’s config (<code>quantization_config</code> in config.json) to see the method, bits and group size.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="paged-attention.html">

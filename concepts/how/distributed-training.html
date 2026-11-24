@@ -26,7 +26,7 @@
         <span class="eyebrow">Training &amp; fine-tuning · 5 of 5</span>
         <h1>How does distributed training (data parallel, FSDP) work?</h1>
         <p class="tldr"><span class="label">In one line</span>Each GPU trains on different data; gradients are averaged across GPUs every step. FSDP also splits the model's weights and optimizer state across GPUs so bigger models fit.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-distributed-training">
@@ -59,11 +59,80 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Plain data parallelism (DDP) needs the whole model plus optimizer state on each GPU.</li><li>Checkpoint regularly: long multi-node jobs will hit hardware failures.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Data-parallel training with PyTorch DDP: wrap the model, give each process its own data shard. Real run with 2 CPU processes (gloo); on GPUs use torchrun and the nccl backend.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import os
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+def train(rank, world_size):
+    os.environ.update(MASTER_ADDR=&quot;127.0.0.1&quot;, MASTER_PORT=&quot;29512&quot;)
+    dist.init_process_group(&quot;gloo&quot;, rank=rank, world_size=world_size)     <span class="c"># &quot;nccl&quot; on GPUs</span>
+    torch.manual_seed(0)                                                  <span class="c"># same starting weights everywhere</span>
+    model = DDP(torch.nn.Linear(4, 1))
+    opt = torch.optim.SGD(model.parameters(), lr=0.05)
+    data = torch.randn(64, 4)
+    target = data @ torch.tensor([[1.0], [2.0], [-1.0], [0.5]])
+    shard = slice(rank * 32, (rank + 1) * 32)                             <span class="c"># each process: different examples</span>
+    for step in range(30):
+        loss = ((model(data[shard]) - target[shard]) ** 2).mean()
+        opt.zero_grad()
+        loss.backward()                                                   <span class="c"># DDP all-reduces gradients here</span>
+        opt.step()
+    w = model.module.weight.detach()
+    print(f&quot;rank {rank}: loss {loss.item():.4f}, weights {[round(v, 2) for v in w[0].tolist()]}&quot;)
+    dist.destroy_process_group()
+
+if __name__ == &quot;__main__&quot;:
+    mp.spawn(train, args=(2,), nprocs=2)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">rank 1: loss 0.0454, weights [0.96, 1.81, -0.88, 0.42]
+rank 0: loss 0.0541, weights [0.96, 1.81, -0.88, 0.42]</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What DDP does inside backward(): all-reduce the gradients so every process applies the identical update. Done by hand with dist.all_reduce.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import os
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+def train(rank, world_size):
+    os.environ.update(MASTER_ADDR=&quot;127.0.0.1&quot;, MASTER_PORT=&quot;29513&quot;)
+    dist.init_process_group(&quot;gloo&quot;, rank=rank, world_size=world_size)
+    torch.manual_seed(0)
+    model = torch.nn.Linear(4, 1)                                   <span class="c"># a plain model, no DDP wrapper</span>
+    data = torch.randn(64, 4)
+    target = data @ torch.tensor([[1.0], [2.0], [-1.0], [0.5]])
+    shard = slice(rank * 32, (rank + 1) * 32)                       <span class="c"># <b>Step 1</b>: different data per process</span>
+    loss = ((model(data[shard]) - target[shard]) ** 2).mean()
+    loss.backward()                                                 <span class="c"># <b>Step 2</b>: local gradients</span>
+    local = model.weight.grad.clone()
+    for p in model.parameters():
+        dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)               <span class="c"># <b>Step 3</b>: sum across processes...</span>
+        p.grad /= world_size                                        <span class="c"># ...then average</span>
+    print(f&quot;rank {rank}: local grad {[round(g, 2) for g in local[0].tolist()]} -> averaged {[round(g, 2) for g in model.weight.grad[0].tolist()]}&quot;)
+    dist.destroy_process_group()                                    <span class="c"># <b>Step 4</b>: identical grads -> identical update</span>
+
+if __name__ == &quot;__main__&quot;:
+    mp.spawn(train, args=(2,), nprocs=2)
+<span class="c"># <b>Step 5 (FSDP)</b>: torch.distributed.fsdp.fully_shard(model) also shards weights and optimizer state</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">rank 1: local grad [-0.93, -2.94, 0.63, -1.47] -> averaged [-2.12, -2.98, 0.54, -1.56]
+rank 0: local grad [-3.31, -3.03, 0.45, -1.65] -> averaged [-2.12, -2.98, 0.54, -1.56]</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>torch/nn/parallel/distributed.py</code> · <code>torch/csrc/distributed/c10d/reducer.cpp (gradient buckets)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Data-parallel training of y = w * x on 2 &quot;GPUs&quot;, each with a full copy of w.</span>
 data = [(1, 2), (2, 4), (3, 6), (4, 8)]          <span class="c"># the true w is 2</span>
 shards = [data[:2], data[2:]]                    <span class="c"># <b>Step 1</b>: each GPU gets different examples</span>
@@ -85,15 +154,17 @@ P = 7e9
 print(f&quot;7B model, mixed-precision Adam (~16 bytes/weight): {P * 16 / 1e9:.0f} GB per full copy, &quot;
       f&quot;~{P * 16 / 8 / 1e9:.0f} GB per GPU with FSDP over 8 GPUs&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">step 1: local grads [-10.0, -50.0] -> average -30.00 -> w = 0.600 on both GPUs
 step 2: local grads [-7.0, -35.0] -> average -21.00 -> w = 1.020 on both GPUs
 step 3: local grads [-4.9, -24.5] -> average -14.70 -> w = 1.314 on both GPUs
 step 4: local grads [-3.4, -17.1] -> average -10.29 -> w = 1.520 on both GPUs
 step 5: local grads [-2.4, -12.0] -> average  -7.20 -> w = 1.664 on both GPUs
 7B model, mixed-precision Adam (~16 bytes/weight): 112 GB per full copy, ~14 GB per GPU with FSDP over 8 GPUs</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Launch with <code>torchrun --nproc_per_node=2 train.py</code>: each process prints its <code>RANK</code> and sees a different slice of the data.</li><li><code>NCCL_DEBUG=INFO</code> logs the all-reduce setup; PyTorch’s profiler shows how much time goes to communication vs compute.</li><li>Watch <code>nvidia-smi</code> per GPU: with plain data parallelism memory is the same on every GPU; with FSDP each holds roughly 1/N of the model state.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="distillation.html">

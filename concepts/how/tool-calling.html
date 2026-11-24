@@ -26,7 +26,7 @@
         <span class="eyebrow">Tools &amp; agents · 1 of 7</span>
         <h1>How does tool (function) calling work?</h1>
         <p class="tldr"><span class="label">In one line</span>The model never runs code. It returns a structured request to call a tool; your app runs the tool and sends the result back for the model to use.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-toolcall">
@@ -68,11 +68,71 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>The tool's name, description and argument schema are effectively part of the prompt: write them for the model.</li><li>Models can request several tool calls in one turn (parallel tool calls).</li><li>Validate arguments in code; never execute them blindly.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Decorate a function, bind it, and the model can ask for it. You run it; the result goes back as a ToolMessage.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.chat_models import init_chat_model
+from langchain.messages import HumanMessage
+from langchain.tools import tool
+
+@tool
+def get_weather(city: str) -> str:
+    &quot;&quot;&quot;Current weather for a city.&quot;&quot;&quot;
+    return {&quot;Pune&quot;: &quot;Rain, 24C&quot;}.get(city, &quot;unknown&quot;)
+
+model = init_chat_model(&quot;anthropic:claude-opus-5-5&quot;).bind_tools([get_weather])
+messages = [HumanMessage(&quot;Do I need an umbrella in Pune today?&quot;)]
+
+ai = model.invoke(messages)
+print(&quot;tool calls:&quot;, ai.tool_calls)
+messages += [ai] + [get_weather.invoke(call) for call in ai.tool_calls]   <span class="c"># invoking with the call -> a ToolMessage</span>
+print(&quot;tool result:&quot;, messages[-1].content, &quot;| linked to&quot;, messages[-1].tool_call_id)
+print(&quot;answer:&quot;, model.invoke(messages).content)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">tool calls: [{'name': 'get_weather', 'args': {'city': 'Pune'}, 'id': 'call_1', 'type': 'tool_call'}]
+tool result: Rain, 24C | linked to call_1
+answer: Yes - it's raining in Pune (24C), so take an umbrella.</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What LangChain translates that into: the raw Anthropic Messages API. Tools are JSON schemas; the model answers with a tool_use block; you reply with a tool_result block carrying the same id.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import json
+import anthropic
+
+client = anthropic.Anthropic()
+tools = [{&quot;name&quot;: &quot;get_weather&quot;, &quot;description&quot;: &quot;Current weather for a city.&quot;,           <span class="c"># <b>Step 1</b>: schemas</span>
+          &quot;input_schema&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: {&quot;city&quot;: {&quot;type&quot;: &quot;string&quot;}}, &quot;required&quot;: [&quot;city&quot;]}}]
+messages = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Do I need an umbrella in Pune today?&quot;}]
+
+def ask():
+    return client.beta.messages.create(model=&quot;claude-opus-5-5&quot;, max_tokens=16000, tools=tools,
+                                       messages=messages, betas=[&quot;server-side-fallback-2026-07-01&quot;], fallbacks=&quot;default&quot;)
+
+response = ask()
+print(&quot;stop_reason:&quot;, response.stop_reason)                    <span class="c"># <b>Step 2</b>: &quot;tool_use&quot;, not text</span>
+tool_use = next(b for b in response.content if b.type == &quot;tool_use&quot;)
+print(&quot;model asked for:&quot;, tool_use.name, tool_use.input, &quot;id&quot;, tool_use.id)
+
+result = {&quot;Pune&quot;: &quot;Rain, 24C&quot;}[tool_use.input[&quot;city&quot;]]           <span class="c"># <b>Step 3</b>: YOUR code runs it</span>
+messages += [{&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: response.content},  <span class="c"># <b>Step 4</b>: echo the call, then the result</span>
+             {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: [{&quot;type&quot;: &quot;tool_result&quot;, &quot;tool_use_id&quot;: tool_use.id, &quot;content&quot;: result}]}]
+print(&quot;sent back:&quot;, json.dumps(messages[-1]))
+print(&quot;answer:&quot;, ask().content[0].text)                          <span class="c"># <b>Step 5</b></span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with anthropic 2.13.0 · with a mocked Anthropic HTTP endpoint (the real SDK validated the request).</p>
+        <span class="label">What it printed</span><pre class="bts-out">stop_reason: tool_use
+model asked for: get_weather {'city': 'Pune'} id toolu_01
+sent back: {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: [{&quot;type&quot;: &quot;tool_result&quot;, &quot;tool_use_id&quot;: &quot;toolu_01&quot;, &quot;content&quot;: &quot;Rain, 24C&quot;}]}
+answer: Yes - it's raining in Pune (24C), so take an umbrella.</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langchain_anthropic/chat_models.py (_format_messages)</code> · <code>Anthropic docs: Tool use</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># The JSON that actually goes back and forth. Field names vary a little by provider; the shape doesn't.</span>
 import json
 
@@ -107,13 +167,15 @@ for call in reply[&quot;tool_calls&quot;]:
     print(&quot;TOOL    ->&quot;, json.dumps(request[&quot;messages&quot;][-1]))
 print(&quot;MODEL   ->&quot;, fake_model(request)[&quot;content&quot;])
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">REQUEST -> {&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Do I need an umbrella in Pune today?&quot;}], &quot;tools&quot;: [{&quot;name&quot;: &quot;get_we ...
 MODEL   -> {&quot;role&quot;: &quot;assistant&quot;, &quot;tool_calls&quot;: [{&quot;id&quot;: &quot;call_1&quot;, &quot;name&quot;: &quot;get_weather&quot;, &quot;arguments&quot;: {&quot;city&quot;: &quot;Pune&quot;}}]}
 TOOL    -> {&quot;role&quot;: &quot;tool&quot;, &quot;tool_call_id&quot;: &quot;call_1&quot;, &quot;content&quot;: &quot;Rain, 24C&quot;}
 MODEL   -> The forecast says Rain, 24C, so yes, take an umbrella.</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>LangChain: <code>ai = model.bind_tools([get_weather]).invoke(&quot;...&quot;)</code>, then print <code>ai.tool_calls</code>: a list of <code>{&quot;name&quot;, &quot;args&quot;, &quot;id&quot;}</code> dicts. That is the model’s whole contribution.</li><li>Print <code>convert_to_openai_tool(get_weather)</code> (from <code>langchain_core.utils.function_calling</code>) to see the JSON schema your Python function becomes.</li><li>Raw SDKs: set <code>ANTHROPIC_LOG=debug</code> or <code>OPENAI_LOG=debug</code> to log each HTTP request the SDK makes; or print the response object and find the tool-call block.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="text-to-sql.html">

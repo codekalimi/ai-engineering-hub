@@ -26,7 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 1 of 9</span>
         <h1>How do embeddings and semantic search work?</h1>
         <p class="tldr"><span class="label">In one line</span>An embedding model turns text into a vector so that similar meanings land close together. Search embeds the query and returns the nearest document vectors.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-embeddings">
@@ -59,14 +59,60 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Never mix vectors from different embedding models.</li><li>Embeddings capture meaning but blur exact identifiers, which is why hybrid search exists.</li><li>More dimensions can mean better accuracy but more storage; some models let you shorten vectors.</li></ul></div>
         </div>
-        <pre>import numpy as np
-
-def cosine(a, b):
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))</pre>
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Embed once, store, then search by meaning. In production the store is pgvector, Qdrant, Pinecone and so on: same interface.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.embeddings import init_embeddings
+from langchain_core.vectorstores import InMemoryVectorStore
+
+embeddings = init_embeddings(&quot;openai:text-embedding-3-small&quot;)
+store = InMemoryVectorStore(embeddings)
+store.add_texts([&quot;Refunds are processed within 5 working days.&quot;,
+                 &quot;Reset your password from the account settings page.&quot;,
+                 &quot;We ship to 40 countries worldwide.&quot;])
+
+for doc, score in store.similarity_search_with_score(&quot;how long does a refund take&quot;, k=2):
+    print(f&quot;{score:.2f}  {doc.page_content}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langchain-core 1.8.4 · with a local embedding model (all-MiniLM-L6-v2) in place of the embedding API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">0.78  Refunds are processed within 5 working days.
+0.01  Reset your password from the account settings page.</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What the store does on add and on search: embed the texts, embed the query with the same model, rank by cosine similarity.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import math
+from langchain.embeddings import init_embeddings
+
+embeddings = init_embeddings(&quot;openai:text-embedding-3-small&quot;)
+texts = [&quot;Refunds are processed within 5 working days.&quot;,
+         &quot;Reset your password from the account settings page.&quot;,
+         &quot;We ship to 40 countries worldwide.&quot;]
+
+vectors = embeddings.embed_documents(texts)        <span class="c"># <b>Steps 1 + 3</b>: one vector per text, stored</span>
+query = embeddings.embed_query(&quot;how long does a refund take&quot;)   <span class="c"># <b>Step 4</b>: same model for the query</span>
+print(f&quot;{len(vectors)} vectors of {len(query)} numbers each&quot;)
+
+def cosine(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    return dot / (math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b)))
+
+for text, vec in sorted(zip(texts, vectors), key=lambda tv: -cosine(query, tv[1])):
+    print(f&quot;{cosine(query, vec):.2f}  {text}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2 · with a local embedding model (all-MiniLM-L6-v2) in place of the embedding API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">3 vectors of 384 numbers each
+0.78  Refunds are processed within 5 working days.
+0.01  Reset your password from the account settings page.
+-0.07  We ship to 40 countries worldwide.</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langchain_core/vectorstores/in_memory.py (InMemoryVectorStore)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A real embedding model is a trained transformer. Here each word has a hand-made vector over</span>
 <span class="c"># 3 &quot;meaning&quot; dimensions [pets, money, weather]; a text's vector is the average of its words.</span>
 import math
@@ -95,6 +141,7 @@ for query in [&quot;my dog is sick&quot;, &quot;what will the rate be on my loan
     for d, v in sorted(index, key=lambda dv: cosine(q, dv[1]), reverse=True):
         print(f&quot;   {cosine(q, v):.2f}  {d}&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">query: 'my dog is sick'
    0.99  Take your puppy to the vet
    0.00  Bank loan interest rate rises
@@ -103,9 +150,10 @@ query: 'what will the rate be on my loan'
    1.00  Bank loan interest rate rises
    0.21  Storm and rain forecast
    0.12  Take your puppy to the vet</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>sentence-transformers: <code>m = SentenceTransformer(&quot;all-MiniLM-L6-v2&quot;); v = m.encode([&quot;my dog is sick&quot;, &quot;take your puppy to the vet&quot;])</code>, then <code>util.cos_sim(v[0], v[1])</code>.</li><li>Print <code>len(v[0])</code> (the dimension) and a few values: an embedding is just a list of floats.</li><li>Make a small similarity table for 5 sentences, including a paraphrase and an unrelated one, to build intuition for what scores mean.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="structured-output.html">

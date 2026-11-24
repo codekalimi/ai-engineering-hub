@@ -26,7 +26,7 @@
         <span class="eyebrow">Inside the LLM · 7 of 8</span>
         <h1>How do reasoning (thinking) models work?</h1>
         <p class="tldr"><span class="label">In one line</span>They're trained to write out intermediate reasoning before the final answer. Spending more tokens on thinking lets them solve harder multi-step problems.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-reasoning">
@@ -55,11 +55,66 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Thinking tokens are usually billed as output tokens.</li><li>The biggest gains are on maths, coding, planning and complex analysis; they're small on simple lookups.</li><li>Prompting &quot;think step by step&quot; matters far less with these models.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Thinking is adaptive on current Claude models: you choose how hard it works with effort. Server-side fallback reruns the request on another model if this one declines.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import anthropic
+
+client = anthropic.Anthropic()
+response = client.beta.messages.create(
+    model=&quot;claude-opus-5-5&quot;,
+    max_tokens=16000,
+    thinking={&quot;type&quot;: &quot;adaptive&quot;, &quot;display&quot;: &quot;summarized&quot;},   <span class="c"># show a summary of the reasoning</span>
+    output_config={&quot;effort&quot;: &quot;high&quot;},                          <span class="c"># low | medium | high | xhigh | max</span>
+    betas=[&quot;server-side-fallback-2026-07-01&quot;],
+    fallbacks=&quot;default&quot;,                                        <span class="c"># rerun on a fallback model if declined</span>
+    messages=[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Is 1001 a prime number?&quot;}],
+)
+for block in response.content:
+    if block.type == &quot;thinking&quot;:
+        print(&quot;THINKING:&quot;, block.thinking)
+    elif block.type == &quot;text&quot;:
+        print(&quot;ANSWER:  &quot;, block.text)
+print(&quot;output tokens (thinking included):&quot;, response.usage.output_tokens)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with anthropic 2.13.0 · with a mocked Anthropic HTTP endpoint (the real SDK validated the request).</p>
+        <span class="label">What it printed</span><pre class="bts-out">THINKING: 1001 is odd and its digit sum is 2, so not 3. Try 7: 7 x 143 = 1001. And 143 = 11 x 13.
+ANSWER:   No. 1001 = 7 x 11 x 13.
+output tokens (thinking included): 140</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">How the habit of reasoning is trained (Step 2): sample several chains, score them with a checker, push up the ones that beat the group average. This is the core of GRPO, as in TRL's GRPOTrainer.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+
+question = &quot;What is 17 x 24?&quot;
+answers = [&quot;408&quot;, &quot;398&quot;, &quot;408&quot;, &quot;418&quot;, &quot;408&quot;, &quot;408&quot;]   <span class="c"># final answers of 6 sampled reasoning chains</span>
+correct = &quot;408&quot;                                        <span class="c"># verifiable: code can check it</span>
+
+rewards = torch.tensor([1.0 if a == correct else 0.0 for a in answers])
+advantages = (rewards - rewards.mean()) / (rewards.std() + 1e-6)   <span class="c"># better than the group -> positive</span>
+print(&quot;rewards:   &quot;, rewards.tolist())
+print(&quot;advantages:&quot;, [round(a, 2) for a in advantages.tolist()])
+
+<span class="c"># log-probability the model gave each whole chain (normally summed over its tokens)</span>
+logprobs = torch.tensor([-42.0, -40.0, -45.0, -39.0, -44.0, -41.0], requires_grad=True)
+loss = -(advantages * logprobs).mean()        <span class="c"># policy gradient</span>
+loss.backward()
+step = (-logprobs.grad).tolist()              <span class="c"># gradient descent moves log-probs this way</span>
+print(&quot;push each chain:&quot;, [&quot;up&quot; if s > 0 else &quot;down&quot; for s in step])
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">rewards:    [1.0, 0.0, 1.0, 0.0, 1.0, 1.0]
+advantages: [0.65, -1.29, 0.65, -1.29, 0.65, 0.65]
+push each chain: ['up', 'down', 'up', 'down', 'up', 'up']</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>trl/trainer/grpo_trainer.py</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Thinking = writing intermediate steps before answering. RL rewards chains that reach right answers.</span>
 import random
 random.seed(3)
@@ -91,13 +146,15 @@ rewards = [1 if ans == correct else 0 for _, ans in samples]
 print(&quot;rewards for 8 sampled chains:&quot;, rewards)
 print(&quot;training raises the probability of the rewarded chains, so careful reasoning becomes the habit&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">budget 0: thinking ['17 x 20 (guessed) = 200', '17 x 4 (guessed) = 200'] -> answer 400
 budget 2: thinking ['17 x 20 = 340', '17 x 4 = 68'] -> answer 408
 rewards for 8 sampled chains: [1, 0, 1, 1, 1, 1, 1, 1]
 training raises the probability of the rewarded chains, so careful reasoning becomes the habit</pre>
-          <span class="label">Watch it in a real system</span>
-          <ul class="bts-see"><li>Anthropic API: enable extended thinking with <code>thinking={&quot;type&quot;: &quot;enabled&quot;, &quot;budget_tokens&quot;: 4000}</code>; the response contains <code>thinking</code> blocks before the <code>text</code> block.</li><li>OpenAI-style APIs report hidden reasoning in usage, e.g. <code>usage.completion_tokens_details.reasoning_tokens</code>: compare it with the visible answer length.</li><li>Run one hard question at low and high effort/budget and compare accuracy, latency and tokens.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>Anthropic API: current Claude models think adaptively; send <code>thinking={&quot;type&quot;: &quot;adaptive&quot;, &quot;display&quot;: &quot;summarized&quot;}</code> and set depth with <code>output_config={&quot;effort&quot;: &quot;high&quot;}</code>. The response has <code>thinking</code> blocks before the <code>text</code> block. (The older fixed <code>budget_tokens</code> setting is rejected by current models.)</li><li>OpenAI-style APIs report hidden reasoning in usage, e.g. <code>usage.completion_tokens_details.reasoning_tokens</code>: compare it with the visible answer length.</li><li>Run one hard question at low and high effort/budget and compare accuracy, latency and tokens.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="training-pipeline.html">

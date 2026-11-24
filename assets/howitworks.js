@@ -60,7 +60,7 @@
   const diagram = (d) => (d.type === "seq" ? seq(d) : flow(d));
   const diagrams = (it) => (Array.isArray(it.diagram) ? it.diagram : [it.diagram]);
 
-  // Everything below the one-line answer: diagram(s), steps, key details, code
+  // Everything below the one-line answer: diagram(s), steps, key details (the code is in codeLevels)
   function body(it) {
     return `${diagrams(it).map((d) => (d.title ? `<span class="label dtitle">${esc(d.title)}</span>` : "") + diagram(d)).join("")}
         <div class="hw-body">
@@ -69,8 +69,7 @@
             <ol>${it.steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>
           </div>
           ${it.notes && it.notes.length ? `<div class="hw-notes"><span class="label">Key details</span><ul>${it.notes.map((s) => `<li>${esc(s)}</li>`).join("")}</ul></div>` : ""}
-        </div>
-        ${it.code ? `<pre>${esc(it.code)}</pre>` : ""}`;
+        </div>`;
   }
 
   const legend = () => `<div class="fd legend">
@@ -102,24 +101,79 @@
     }).join("\n");
   }
 
-  // bts = { code, see[] }, out = captured stdout. opts.guide = link to the general guide page.
-  function behind(bts, out, opts) {
-    if (!bts) return "";
-    opts = opts || {};
-    const inner = `
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
-          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>${pyHighlight(bts.code)}</pre></div>
-          ${out ? `<span class="label">What it prints</span><pre class="bts-out">${esc(out)}</pre>` : ""}
-          <span class="label">Watch it in a real system</span>
-          <ul class="bts-see">${bts.see.map((s) => `<li>${inline(s)}</li>`).join("")}</ul>
-          ${opts.guide ? `<p class="bts-more">More ways to look inside any AI tool: <a href="${opts.guide}">How to see behind the scenes</a></p>` : ""}`;
-    if (opts.collapsed) {
-      return `<details class="bts bts-details"><summary><span class="label">Behind the scenes</span> runnable code, its real output, and how to watch it for real</summary>${inner}</details>`;
-    }
-    return `<section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>${inner}</section>`;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+  // How a Level 1/2 snippet was tested, in one line
+  function testedLine(r, versions) {
+    if (!r) return `<p class="lv-test none">Not run yet: run <code>node concepts/run-levels.js</code>.</p>`;
+    if (r.status === "checked") return `<p class="lv-test checked"><b>Checked, not run:</b> ${esc(r.why)}.</p>`;
+    if (r.status === "parsed") return `<p class="lv-test ok"><b>✓ Validated:</b> parsed as YAML.</p>`;
+    const libs = r.libs && r.libs.length ? r.libs.join(", ") : `Python ${(versions || {}).python || "3"}`;
+    const fakes = r.fakes && r.fakes.length ? ` · with ${r.fakes.join("; ")}` : "";
+    return `<p class="lv-test ok"><b>✓ Ran</b> with ${esc(libs)}${esc(fakes)}.</p>`;
   }
 
-  const R = { esc, node, flow, seq, diagram, diagrams, body, legend, behind, pyHighlight };
+  function outputBlock(out, label) {
+    if (!out) return "";
+    const lines = out.split("\n").length;
+    const pre = `<pre class="bts-out">${esc(out)}</pre>`;
+    return lines <= 14
+      ? `<span class="label">${label}</span>${pre}`
+      : `<details class="lv-out"><summary>${label} (${plural(lines, "line")})</summary>${pre}</details>`;
+  }
+
+  const LEVELS = [
+    ["use", "1", "Use it", "What you'd write at work"],
+    ["under", "2", "Under the hood", "What the library does for you, with its real classes"],
+    ["scratch", "3", "From scratch", "The idea in plain Python, no libraries"],
+  ];
+
+  // The code for one explanation at three zoom levels.
+  // d = { levels: {use, under}, levelsOut: {use, under}, versions, bts: {code, see}, btsOut }
+  function codeLevels(d, opts) {
+    opts = opts || {};
+    const lv = d.levels || {}, out = d.levelsOut || {};
+    if (!lv.use && !lv.under && !d.bts) return "";
+    const block = ([key, n, title, sub]) => {
+      if (key === "scratch") {
+        if (!d.bts) return "";
+        return `<div class="clv clv-3" id="${opts.collapsed ? "" : "level-3"}">
+          <div class="lv-head"><span class="lv-n">${n}</span><div><h3>${title}</h3><p>${sub}</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
+          <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>${pyHighlight(d.bts.code)}</pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
+          ${outputBlock(d.btsOut, "What it prints")}
+        </div>`;
+      }
+      const snip = lv[key];
+      if (!snip) return "";
+      const code = snip.code.replace(/^\n/, "");
+      const file = snip.lang === "yaml" ? "yaml" : "python";
+      return `<div class="clv clv-${n}" id="${opts.collapsed ? "" : "level-" + n}">
+        <div class="lv-head"><span class="lv-n">${n}</span><div><h3>${title}</h3><p>${sub}</p></div></div>
+        ${snip.note ? `<p class="lv-note">${inline(snip.note)}</p>` : ""}
+        <div class="bts-code"><span class="bts-file">${file}</span><pre data-copy>${pyHighlight(code)}</pre></div>
+        ${testedLine(out[key], d.versions)}
+        ${out[key] && out[key].out ? outputBlock(out[key].out, "What it printed") : ""}
+        ${snip.source && snip.source.length ? `<p class="lv-src"><span class="label">Read the real code</span> ${snip.source.map((x) => `<code>${esc(x)}</code>`).join(" · ")}</p>` : ""}
+      </div>`;
+    };
+    const see = d.bts && d.bts.see ? `<div class="lv-see"><span class="label">Watch it in a real system</span>
+          <ul class="bts-see">${d.bts.see.map((s) => `<li>${inline(s)}</li>`).join("")}</ul>
+          ${opts.guide ? `<p class="bts-more">More ways to look inside any AI tool: <a href="${opts.guide}">How to see behind the scenes</a></p>` : ""}</div>` : "";
+    const nav = `<div class="lv-nav">${LEVELS.filter(([k]) => (k === "scratch" ? d.bts : lv[k])).map(([k, n, t]) => opts.collapsed
+      ? `<span class="lv-chip"><b>${n}</b> ${t}</span>` : `<a class="lv-chip" href="#level-${n}"><b>${n}</b> ${t}</a>`).join('<span class="lv-arrow">→</span>')}</div>`;
+    const inner = `<p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        ${nav}
+        ${LEVELS.map(block).join("")}
+        ${see}`;
+    if (opts.collapsed) {
+      return `<details class="bts bts-details"><summary><span class="label">The code</span> use it → under the hood → from scratch, each tested</summary>${inner}</details>`;
+    }
+    return `<section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div>${inner}</section>`;
+  }
+
+  const R = { esc, node, flow, seq, diagram, diagrams, body, legend, codeLevels, pyHighlight };
   if (typeof module !== "undefined" && module.exports) { module.exports = R; return; }
   root.HowRender = R;
 
@@ -128,6 +182,7 @@
   const $ = (id) => document.getElementById(id);
   if (!H || !$("hw-list")) return;
   const META = root.HOW_META || {};
+  const LV_OUT = root.HOW_LEVELS_OUTPUT || { results: {}, versions: {} };
 
   window.PAGE_SUBS = [["#legend", "How to read the diagrams"]];
 
@@ -136,7 +191,9 @@
   $("hw-list").innerHTML = H.cats.map((c) => {
     const items = H.items.filter((it) => it.cat === c.id).map((it) => {
       const page = META[it.id] ? `how/${META[it.id].slug}.html` : "";
-      const hay = [it.q, it.tldr, ...it.steps, ...(it.notes || []), it.code || "", c.title,
+      const lvl = (root.HOW_LEVELS || {})[it.id] || {};
+      const hay = [it.q, it.tldr, ...it.steps, ...(it.notes || []), c.title,
+        (lvl.use || {}).code || "", (lvl.under || {}).code || "",
         ...diagrams(it).flatMap((d) => d.type === "seq" ? d.actors.concat(d.msgs.map((m) => m[2])) : d.rows.flatMap((r) => r.steps.concat(r.label || "", r.loop || "")))].join(" ").toLowerCase();
       return `<article class="hw" id="${it.id}" data-search="${esc(hay)}">
         <header class="hw-head">
@@ -145,7 +202,9 @@
         </header>
         <p class="tldr"><span class="label">In one line</span>${esc(it.tldr)}</p>
         ${body(it)}
-        ${behind((root.HOW_INTERNALS || {})[it.id], (root.HOW_INTERNALS_OUTPUT || {})[it.id], { collapsed: true, guide: "behind-the-scenes.html" })}
+        ${codeLevels({ levels: (root.HOW_LEVELS || {})[it.id], levelsOut: LV_OUT.results[it.id], versions: LV_OUT.versions,
+                       bts: (root.HOW_INTERNALS || {})[it.id], btsOut: (root.HOW_INTERNALS_OUTPUT || {})[it.id] },
+                     { collapsed: true, guide: "behind-the-scenes.html" })}
       </article>`;
     }).join("");
     return `<section class="section hwcat" id="${c.id}">

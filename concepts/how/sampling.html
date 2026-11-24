@@ -26,7 +26,7 @@
         <span class="eyebrow">Inside the LLM · 5 of 8</span>
         <h1>How does sampling (temperature, top-k, top-p) work?</h1>
         <p class="tldr"><span class="label">In one line</span>Scores are divided by the temperature, turned into probabilities, cut down to the most likely tokens, and then one token is drawn at random.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-sampling">
@@ -55,20 +55,75 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Extraction and classification: temperature around 0. Creative writing: around 0.7–1.</li><li>Tune temperature or top-p, rarely both.</li><li>Even greedy decoding can vary slightly between runs because of batching and floating-point order on the server.</li></ul></div>
         </div>
-        <pre>import numpy as np
-
-def sample(logits, temperature=0.7, top_p=0.9):
-    if temperature == 0:
-        return int(np.argmax(logits))
-    p = np.exp((logits - logits.max()) / temperature)
-    p /= p.sum()
-    order = np.argsort(-p)
-    keep = order[: np.searchsorted(np.cumsum(p[order]), top_p) + 1]
-    return int(np.random.choice(keep, p=p[keep] / p[keep].sum()))</pre>
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Open models and many APIs take temperature/top_p. Current Claude models don't accept them any more: you steer those with the prompt and effort instead.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
+
+name = &quot;Qwen/Qwen2.5-0.5B-Instruct&quot;
+tok = AutoTokenizer.from_pretrained(name)
+model = AutoModelForCausalLM.from_pretrained(name)
+messages = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Suggest a name for a coffee shop. Reply with the name only.&quot;}]
+inputs = tok.apply_chat_template(messages, add_generation_prompt=True, return_tensors=&quot;pt&quot;)
+
+set_seed(0)
+for temperature in (0.2, 1.5):
+    for _ in range(3):
+        out = model.generate(**inputs, do_sample=True, temperature=temperature, top_p=0.9, max_new_tokens=12)
+        reply = tok.decode(out[0, inputs[&quot;input_ids&quot;].shape[1]:], skip_special_tokens=True)
+        print(f&quot;temperature {temperature}: {reply.strip()}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">temperature 0.2: The Coffee Haven
+temperature 0.2: The Coffee Haven
+temperature 0.2: Coffee Bean Haven
+temperature 1.5: Bean Noodle Café
+temperature 1.5: Coffee Lane Tavern
+temperature 1.5: Cafe Del Verdes</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What do_sample, temperature and top_p do to the model's real next-token scores.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+name = &quot;Qwen/Qwen2.5-0.5B-Instruct&quot;
+tok = AutoTokenizer.from_pretrained(name)
+model = AutoModelForCausalLM.from_pretrained(name).eval()
+with torch.no_grad():
+    logits = model(**tok(&quot;The most popular fruit in the world is the&quot;, return_tensors=&quot;pt&quot;)).logits[0, -1].float()   <span class="c"># <b>Step 1</b></span>
+
+def top5(probs):
+    p, i = torch.topk(probs, 5)
+    return &quot;, &quot;.join(f&quot;{tok.decode(int(t))!r} {v:.2f}&quot; for v, t in zip(p, i))
+
+for T in (0.5, 1.0, 1.5):                       <span class="c"># <b>Step 2</b>: divide by temperature; <b>Step 3</b>: softmax</span>
+    print(f&quot;T={T}: {top5((logits / T).softmax(-1))}&quot;)
+
+probs = logits.softmax(-1)
+sorted_p, order = probs.sort(descending=True)
+keep = (sorted_p.cumsum(0) - sorted_p) &lt; 0.9    <span class="c"># <b>Step 4</b>: top-p - smallest set reaching 90%</span>
+print(f&quot;top-p 0.9 keeps {int(keep.sum())} of {probs.numel():,} tokens&quot;)
+filtered = torch.zeros_like(probs)
+filtered[order[keep]] = sorted_p[keep]
+torch.manual_seed(0)
+picks = torch.multinomial(filtered / filtered.sum(), 6, replacement=True)   <span class="c"># <b>Step 5</b>: weighted draw</span>
+print(&quot;6 draws:&quot;, [tok.decode(int(t)) for t in picks])
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0, transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">T=0.5: ' apple' 0.77, ' banana' 0.17, ' orange' 0.03, ' pineapple' 0.01, ' water' 0.00
+T=1.0: ' apple' 0.36, ' banana' 0.17, ' orange' 0.08, ' pineapple' 0.03, ' water' 0.03
+T=1.5: ' apple' 0.10, ' banana' 0.06, ' orange' 0.04, ' pineapple' 0.02, ' water' 0.02
+top-p 0.9 keeps 42 of 151,936 tokens
+6 draws: [' pineapple', ' banana', ' apple', ' mango', ' cherry', ' banana']</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>transformers/generation/logits_process.py (TemperatureLogitsWarper, TopPLogitsWarper)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import math, random
 random.seed(1)
 
@@ -102,15 +157,17 @@ draws = [random.choices(list(kept), weights=list(kept.values()))[0] for _ in ran
 print(&quot;10 draws:&quot;, draws)
 print(&quot;temperature 0 (greedy) always picks:&quot;, max(logits, key=logits.get))
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">T=0.2: sunny 0.92  cloudy 0.08  rainy 0.01  cold 0.00  purple 0.00
 T=1.0: sunny 0.47  cloudy 0.29  rainy 0.17  cold 0.06  purple 0.01
 T=2.0: sunny 0.35  cloudy 0.27  rainy 0.21  cold 0.13  purple 0.05
 top-p 0.9 keeps: ['sunny', 'cloudy', 'rainy']
 10 draws: ['sunny', 'rainy', 'cloudy', 'sunny', 'sunny', 'sunny', 'cloudy', 'cloudy', 'sunny', 'sunny']
 temperature 0 (greedy) always picks: sunny</pre>
-          <span class="label">Watch it in a real system</span>
-          <ul class="bts-see"><li>Ask an API for <code>logprobs=True, top_logprobs=5</code> and print the alternatives for each output token; then change <code>temperature</code> and watch them shift.</li><li>Hugging Face: <code>model.generate(..., do_sample=True, temperature=0.7, top_p=0.9)</code>; set <code>do_sample=False</code> for greedy decoding.</li><li>Run the same prompt 5 times at temperature 0 and at 1.0 to feel the difference in variety.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
+          <ul class="bts-see"><li>On APIs that expose them (OpenAI-style APIs, local servers like vLLM), ask for <code>logprobs=True, top_logprobs=5</code> and print the alternatives for each token. Current Claude models no longer accept <code>temperature</code>/<code>top_p</code>: you steer them with the prompt and <code>effort</code> instead.</li><li>Hugging Face: <code>model.generate(..., do_sample=True, temperature=0.7, top_p=0.9)</code>; set <code>do_sample=False</code> for greedy decoding.</li><li>Run the same prompt 5 times at temperature 0 and at 1.0 to feel the difference in variety.</li></ul>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="kv-cache.html">

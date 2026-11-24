@@ -171,7 +171,7 @@ print(f"70B-style model: {per_token / 1e6:.2f} MB per token, {per_token * 8192 /
 `);
 
   X("sampling", [
-    'Ask an API for `logprobs=True, top_logprobs=5` and print the alternatives for each output token; then change `temperature` and watch them shift.',
+    'On APIs that expose them (OpenAI-style APIs, local servers like vLLM), ask for `logprobs=True, top_logprobs=5` and print the alternatives for each token. Current Claude models no longer accept `temperature`/`top_p`: you steer them with the prompt and `effort` instead.',
     'Hugging Face: `model.generate(..., do_sample=True, temperature=0.7, top_p=0.9)`; set `do_sample=False` for greedy decoding.',
     'Run the same prompt 5 times at temperature 0 and at 1.0 to feel the difference in variety.',
   ], P`
@@ -255,7 +255,7 @@ print("after SFT:  after '?' comes", repr(predict(W, "?")))
 `);
 
   X("reasoning", [
-    'Anthropic API: enable extended thinking with `thinking={"type": "enabled", "budget_tokens": 4000}`; the response contains `thinking` blocks before the `text` block.',
+    'Anthropic API: current Claude models think adaptively; send `thinking={"type": "adaptive", "display": "summarized"}` and set depth with `output_config={"effort": "high"}`. The response has `thinking` blocks before the `text` block. (The older fixed `budget_tokens` setting is rejected by current models.)',
     'OpenAI-style APIs report hidden reasoning in usage, e.g. `usage.completion_tokens_details.reasoning_tokens`: compare it with the visible answer length.',
     'Run one hard question at low and high effort/budget and compare accuracy, latency and tokens.',
   ], P`

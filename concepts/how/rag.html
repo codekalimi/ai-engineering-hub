@@ -26,7 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 3 of 9</span>
         <h1>How does RAG work end to end?</h1>
         <p class="tldr"><span class="label">In one line</span>Documents are split, embedded and stored ahead of time. For each question, the most relevant chunks are retrieved and put into the prompt, so the model answers from them.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-rag">
@@ -59,11 +59,86 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Most quality problems are retrieval problems, so always log what was retrieved.</li><li>Evaluate retrieval (was the right chunk found?) separately from generation (was the answer faithful?).</li><li>Keep the index fresh with document IDs and content hashes.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Retrieve, put the chunks in the prompt, answer with citations. Most production RAG is this function plus good data and evals.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.chat_models import init_chat_model
+from langchain.embeddings import init_embeddings
+from langchain_core.vectorstores import InMemoryVectorStore
+
+store = InMemoryVectorStore(init_embeddings(&quot;openai:text-embedding-3-small&quot;))
+store.add_texts(
+    [&quot;Employees get 24 days of paid leave per year.&quot;, &quot;Laptops are replaced every 3 years.&quot;,
+     &quot;Book flights through the travel portal.&quot;],
+    metadatas=[{&quot;source&quot;: &quot;hr-policy.md&quot;}, {&quot;source&quot;: &quot;it-policy.md&quot;}, {&quot;source&quot;: &quot;travel.md&quot;}],
+)
+model = init_chat_model(&quot;anthropic:claude-opus-5-5&quot;)
+
+def answer(question):
+    docs = store.similarity_search(question, k=2)
+    context = &quot;\n&quot;.join(f&quot;[{d.metadata['source']}] {d.page_content}&quot; for d in docs)
+    reply = model.invoke([(&quot;system&quot;, f&quot;Answer only from this context and cite the source.\n\n{context}&quot;),
+                          (&quot;human&quot;, question)])
+    return reply.content, [d.metadata[&quot;source&quot;] for d in docs]
+
+print(answer(&quot;How many days of paid leave do I get?&quot;))
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langchain-core 1.8.4 · with a scripted chat model in place of the API; a local embedding model (all-MiniLM-L6-v2) in place of the embedding API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">('You get 24 days of paid leave per year [hr-policy.md].', ['hr-policy.md', 'it-policy.md'])</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">The pieces behind that function: Documents with metadata, splitting, indexing, a metadata filter for permissions, and the exact messages the model receives.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.chat_models import init_chat_model
+from langchain.embeddings import init_embeddings
+from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+<span class="c"># <b>Step 1 (indexing, ahead of time)</b>: documents keep their metadata through every step</span>
+raw = [Document(&quot;Employees get 24 days of paid leave per year. Unused leave carries over up to 5 days.&quot;,
+                metadata={&quot;source&quot;: &quot;hr-policy.md&quot;, &quot;team&quot;: &quot;all&quot;}),
+       Document(&quot;Executive bonus pool is 2M this year.&quot;, metadata={&quot;source&quot;: &quot;finance.md&quot;, &quot;team&quot;: &quot;finance&quot;})]
+chunks = RecursiveCharacterTextSplitter(chunk_size=60, chunk_overlap=0).split_documents(raw)
+store = InMemoryVectorStore(init_embeddings(&quot;openai:text-embedding-3-small&quot;))
+store.add_documents(chunks)
+print(f&quot;{len(raw)} documents -> {len(chunks)} chunks:&quot;, [c.page_content for c in chunks])
+
+<span class="c"># <b>Step 3</b>: retrieval, filtered to what this user may see</span>
+question = &quot;How many days of paid leave do I get?&quot;
+docs = store.similarity_search(question, k=2, filter=lambda d: d.metadata[&quot;team&quot;] == &quot;all&quot;)
+
+<span class="c"># <b>Step 5</b>: the prompt template turns context + question into messages</span>
+prompt = ChatPromptTemplate.from_messages([
+    (&quot;system&quot;, &quot;Answer only from the context. Cite the source in brackets.\n\n{context}&quot;),
+    (&quot;human&quot;, &quot;{question}&quot;),
+])
+messages = prompt.invoke({&quot;context&quot;: &quot;\n&quot;.join(f&quot;[{d.metadata['source']}] {d.page_content}&quot; for d in docs),
+                          &quot;question&quot;: question}).to_messages()
+for m in messages:
+    print(f&quot;--- {m.type} ---\n{m.content}&quot;)
+print(&quot;--- answer ---\n&quot; + init_chat_model(&quot;anthropic:claude-opus-5-5&quot;).invoke(messages).content)   <span class="c"># <b>Step 6</b></span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langchain-core 1.8.4, langchain-text-splitters 1.2.0 · with a scripted chat model in place of the API; a local embedding model (all-MiniLM-L6-v2) in place of the embedding API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">2 documents -> 3 chunks: ['Employees get 24 days of paid leave per year. Unused leave', 'carries over up to 5 days.', 'Executive bonus pool is 2M this year.']
+--- system ---
+Answer only from the context. Cite the source in brackets.
+
+[hr-policy.md] Employees get 24 days of paid leave per year. Unused leave
+[hr-policy.md] carries over up to 5 days.
+--- human ---
+How many days of paid leave do I get?
+--- answer ---
+You get 24 days of paid leave per year [hr-policy.md].</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langchain_core/documents/base.py</code> · <code>langchain_core/prompts/chat.py</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A whole RAG pipeline in miniature. Retrieval is word overlap instead of embeddings and the</span>
 <span class="c"># &quot;LLM&quot; is a stub, so you can see exactly what gets built and passed along.</span>
 import re
@@ -97,6 +172,7 @@ def fake_llm(prompt):
     return context.splitlines()[0].split(&quot;) &quot;, 1)[1] + &quot; [1]&quot;
 print(&quot;answer:&quot;, fake_llm(prompt))
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">indexed 6 chunks
 ---- prompt sent to the LLM ----
 Answer only from the context. Cite like [1].
@@ -108,9 +184,10 @@ Context:
 Question: How many days of paid leave do I get?
 --------------------------------
 answer: Employees get 24 days of paid leave per year [1]</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>LangChain: <code>from langchain_core.globals import set_debug; set_debug(True)</code> prints every step’s input and output, including the final prompt with the retrieved chunks.</li><li>LangSmith: set <code>LANGSMITH_TRACING=true</code> and <code>LANGSMITH_API_KEY</code>; each run shows the retriever’s documents and the exact prompt sent to the model.</li><li>Always print the retrieved chunks next to the answer while developing: most bad answers are bad retrieval.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="hnsw-vector-search.html">

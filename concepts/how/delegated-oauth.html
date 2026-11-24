@@ -26,7 +26,7 @@
         <span class="eyebrow">Tools &amp; agents · 7 of 7</span>
         <h1>How does an agent act on behalf of a user safely (delegated OAuth)?</h1>
         <p class="tldr"><span class="label">In one line</span>The user grants the app limited, scoped access through OAuth, and the agent calls APIs with that user's token, so it can never see or do more than the user could.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-delegated-auth">
@@ -70,11 +70,84 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>This contains the damage from prompt injection: the agent can't exceed the user's access.</li><li>Request the narrowest scopes needed, and keep write scopes behind approval.</li><li>Log every action with the user's identity for audit.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">The user's token travels in the runtime context. The model never sees it (it isn't a tool argument); the tool passes it to the API.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from dataclasses import dataclass
+from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+from langchain.tools import ToolRuntime, tool
+
+@dataclass
+class UserContext:
+    user_id: str
+    access_token: str            <span class="c"># issued by your identity provider after the user consented</span>
+
+def calendar_api(token, day):    <span class="c"># stands in for the real API, which checks the token itself</span>
+    events = {&quot;meera&quot;: [&quot;10:00 design review&quot;, &quot;13:00 lunch with Arjun&quot;]}
+    return events.get(TOKENS.get(token, &quot;&quot;), &quot;401 unauthorized&quot;)
+TOKENS = {&quot;tok-meera-read&quot;: &quot;meera&quot;}
+
+@tool
+def read_calendar(day: str, runtime: ToolRuntime[UserContext]) -> str:
+    &quot;&quot;&quot;Read the signed-in user's calendar for a day.&quot;&quot;&quot;
+    return str(calendar_api(runtime.context.access_token, day))   <span class="c"># the USER's token, not a service account</span>
+
+print(&quot;what the model sees of the tool:&quot;, read_calendar.args)     <span class="c"># no token in here</span>
+agent = create_agent(init_chat_model(&quot;anthropic:claude-opus-5-5&quot;), [read_calendar], context_schema=UserContext)
+result = agent.invoke({&quot;messages&quot;: [(&quot;user&quot;, &quot;What's on my calendar today?&quot;)]},
+                      context=UserContext(user_id=&quot;meera&quot;, access_token=&quot;tok-meera-read&quot;))
+print(result[&quot;messages&quot;][-1].content)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">what the model sees of the tool: {'day': {'title': 'Day', 'type': 'string'}}
+You have a design review at 10:00 and lunch with Arjun at 13:00.</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What an auth library and the API do with that token: a token exchange for a narrow, short-lived token, then checks of audience, expiry and scope. The identity provider is mocked; the request shape is the standard OAuth token exchange (RFC 8693).</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import base64
+import json
+import time
+import httpx
+
+def fake_idp(request):                     <span class="c"># stands in for your identity provider's /token endpoint</span>
+    form = dict(x.split(&quot;=&quot;) for x in request.content.decode().split(&quot;&amp;&quot;))
+    claims = {&quot;sub&quot;: &quot;meera&quot;, &quot;aud&quot;: form[&quot;audience&quot;], &quot;scope&quot;: form[&quot;scope&quot;].replace(&quot;+&quot;, &quot; &quot;), &quot;exp&quot;: int(time.time()) + 300}
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip(&quot;=&quot;)
+    return httpx.Response(200, json={&quot;access_token&quot;: f&quot;header.{payload}.signature&quot;, &quot;expires_in&quot;: 300})
+
+idp = httpx.Client(transport=httpx.MockTransport(fake_idp))
+<span class="c"># <b>Steps 1-2</b>: swap the user's login token for a narrow token for ONE API</span>
+resp = idp.post(&quot;https://idp.example.com/oauth/token&quot;, data={
+    &quot;grant_type&quot;: &quot;urn:ietf:params:oauth:grant-type:token-exchange&quot;,
+    &quot;subject_token&quot;: &quot;&lt;the user's token>&quot;,
+    &quot;subject_token_type&quot;: &quot;urn:ietf:params:oauth:token-type:access_token&quot;,
+    &quot;audience&quot;: &quot;calendar-api&quot;,
+    &quot;scope&quot;: &quot;calendar.read&quot;,
+})
+token = resp.json()[&quot;access_token&quot;]
+
+<span class="c"># <b>Step 4</b>: what the API checks on every call (after verifying the signature)</span>
+part = token.split(&quot;.&quot;)[1]
+claims = json.loads(base64.urlsafe_b64decode(part + &quot;=&quot; * (-len(part) % 4)))
+print(&quot;claims:&quot;, {k: claims[k] for k in (&quot;sub&quot;, &quot;aud&quot;, &quot;scope&quot;)}, f&quot;expires in {claims['exp'] - int(time.time())}s&quot;)
+for needed in (&quot;calendar.read&quot;, &quot;calendar.write&quot;):
+    ok = claims[&quot;aud&quot;] == &quot;calendar-api&quot; and claims[&quot;exp&quot;] > time.time() and needed in claims[&quot;scope&quot;].split()
+    print(f&quot;{needed}: {'allowed' if ok else '403 forbidden'}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with Python 3.12.14.</p>
+        <span class="label">What it printed</span><pre class="bts-out">claims: {'sub': 'meera', 'aud': 'calendar-api', 'scope': 'calendar.read'} expires in 300s
+calendar.read: allowed
+calendar.write: 403 forbidden</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>RFC 8693: OAuth 2.0 Token Exchange</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Delegated access, simplified: real tokens are JWTs signed with RSA/EC keys by an identity provider.</span>
 import base64, hashlib, hmac, json, time
 
@@ -111,13 +184,15 @@ print(&quot;token says:&quot;, {k: claims[k] for k in (&quot;sub&quot;, &quot;au
 for action, owner in [(&quot;read&quot;, &quot;meera&quot;), (&quot;write&quot;, &quot;meera&quot;), (&quot;read&quot;, &quot;ceo&quot;)]:
     print(f&quot;agent tries to {action} {owner}'s calendar: {calendar_api(token, action, owner)}&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">token says: {'sub': 'meera', 'aud': 'calendar-api', 'scope': 'calendar.read'} + an expiry 10 minutes away
 agent tries to read meera's calendar: 200 read meera's calendar
 agent tries to write meera's calendar: 403 token lacks scope calendar.write
 agent tries to read ceo's calendar: 403 meera cannot access ceo's calendar</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Decode a token locally to read its claims (<code>sub</code>, <code>aud</code>, <code>scope</code>, <code>exp</code>): the payload is the middle part, base64url-encoded. Don’t paste real tokens into websites.</li><li>Call the target API with a token that lacks a scope and confirm you get a 403: that is the API enforcing the user’s permissions, not your agent.</li><li>Log which user and which scopes every agent tool call ran with; that audit trail is what security reviewers ask for.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="human-in-the-loop.html">

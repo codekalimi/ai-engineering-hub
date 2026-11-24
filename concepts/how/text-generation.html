@@ -26,7 +26,7 @@
         <span class="eyebrow">Inside the LLM · 1 of 8</span>
         <h1>How does an LLM generate text?</h1>
         <p class="tldr"><span class="label">In one line</span>It predicts one token at a time: text becomes tokens, the transformer scores every possible next token, one is picked, appended, and the loop repeats.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-generate">
@@ -55,11 +55,64 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Generation is sequential, which is why output length drives latency.</li><li>The model has no memory between requests: everything it knows about the conversation is in the input tokens.</li><li>Generation stops at an end-of-sequence token, a stop string, or the max_tokens limit.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">One call. The provider runs the whole generation loop on its GPUs and bills you per input and output token.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.chat_models import init_chat_model
+
+model = init_chat_model(&quot;anthropic:claude-opus-5-5&quot;, max_tokens=1000)
+reply = model.invoke(&quot;Explain a KV cache in one sentence.&quot;)
+
+print(reply.content)
+print(reply.usage_metadata)      <span class="c"># output tokens drive latency and cost: they are generated one by one</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">A KV cache stores each token's keys and values, so every new token only computes its own.
+{'input_tokens': 50, 'output_tokens': 17, 'total_tokens': 67}</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">This is what model.generate() (and every inference server) does: the token-by-token loop, written out with a real 0.5B model.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+name = &quot;Qwen/Qwen2.5-0.5B-Instruct&quot;
+tok = AutoTokenizer.from_pretrained(name)
+model = AutoModelForCausalLM.from_pretrained(name).eval()
+
+ids = tok(&quot;The capital of France is&quot;, return_tensors=&quot;pt&quot;).input_ids   <span class="c"># <b>Step 1</b>: text -> token ids</span>
+cache = None
+for _ in range(8):
+    with torch.no_grad():
+        <span class="c"># <b>Steps 2-4</b>: embeddings -> transformer layers -> one score (logit) per vocabulary token</span>
+        out = model(input_ids=ids if cache is None else ids[:, -1:], cache=cache, use_cache=True)
+    cache = out.cache                                   <span class="c"># KV cache: next step only feeds the newest token</span>
+    probs = out.logits[0, -1].softmax(-1)
+    next_id = int(probs.argmax())                       <span class="c"># <b>Step 5</b>: pick one (greedy here; see Sampling)</span>
+    print(f&quot;{tok.decode(next_id)!r:10} p={probs[next_id]:.2f}  (vocabulary: {probs.numel():,} tokens)&quot;)
+    if next_id == tok.eos_token_id:
+        break
+    ids = torch.cat([ids, torch.tensor([[next_id]])], dim=1)   <span class="c"># <b>Step 6</b>: append and repeat</span>
+print(tok.decode(ids[0]))
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0, transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">' Paris'   p=0.27  (vocabulary: 151,936 tokens)
+'.'        p=0.51  (vocabulary: 151,936 tokens)
+' It'      p=0.18  (vocabulary: 151,936 tokens)
+' is'      p=0.59  (vocabulary: 151,936 tokens)
+' the'     p=0.31  (vocabulary: 151,936 tokens)
+' largest' p=0.28  (vocabulary: 151,936 tokens)
+' city'    p=0.78  (vocabulary: 151,936 tokens)
+' in'      p=0.77  (vocabulary: 151,936 tokens)
+The capital of France is Paris. It is the largest city in</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>transformers/generation/utils.py (GenerationMixin.generate)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A toy language model: the next-token scores come from a lookup table instead of a transformer.</span>
 import math, random
 random.seed(0)
@@ -92,6 +145,7 @@ for step in range(10):                       <span class="c"># max_tokens</span>
     ids.append(next_id)
 print(&quot;final:&quot;, decode(ids))
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">step 0: 'the cat'                    -> 'sat'
 step 1: 'the cat sat'                -> 'on'
 step 2: 'the cat sat on'             -> 'the'
@@ -99,9 +153,10 @@ step 3: 'the cat sat on the'         -> 'mat'
 step 4: 'the cat sat on the mat'     -> '.'
 step 5: 'the cat sat on the mat .'   -> '&lt;eos>'
 final: the cat sat on the mat .</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Hugging Face: run the loop yourself: <code>logits = model(input_ids).logits[:, -1, :]</code>, pick <code>logits.argmax()</code>, append it to <code>input_ids</code>, repeat. That is exactly what <code>model.generate()</code> does for you.</li><li>Print the top candidates at each step: <code>model.generate(..., output_scores=True, return_dict_in_generate=True)</code> returns the scores for every generated position.</li><li>With an API, ask for <code>logprobs=True, top_logprobs=5</code> (OpenAI-style APIs) to see which tokens the model almost picked.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <span class="tn prev none"></span>

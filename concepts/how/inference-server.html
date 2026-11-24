@@ -26,7 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 1 of 10</span>
         <h1>How does an inference server (like vLLM) handle a request?</h1>
         <p class="tldr"><span class="label">In one line</span>The request is tokenized and queued; a scheduler admits it when there's KV-cache memory, runs prefill, then keeps it in a continuously batched decode loop, streaming tokens back.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-inference-server">
@@ -55,11 +55,60 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Under memory pressure, the scheduler can pause (preempt) a request and resume it later.</li><li>Prefix caching skips prefill for prompt parts already in the cache.</li><li>Key settings: max model length, max concurrent sequences, GPU memory fraction.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Start vLLM, then call it like any OpenAI-compatible API. In a shell: vllm serve Qwen/Qwen2.5-7B-Instruct --max-model-len 8192</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from openai import OpenAI
+
+client = OpenAI(base_url=&quot;http://localhost:8000/v1&quot;, api_key=&quot;not-needed-locally&quot;)
+response = client.chat.completions.create(
+    model=&quot;Qwen/Qwen2.5-7B-Instruct&quot;,
+    messages=[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Explain continuous batching in one sentence.&quot;}],
+    max_tokens=100,
+)
+print(response.choices[0].message.content)
+print(response.usage)          <span class="c"># prompt and completion tokens, as with a hosted API</span>
+</pre></div>
+        <p class="lv-test checked"><b>Checked, not run:</b> needs a GPU server running vLLM; syntax and imports were checked.</p>
+        
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">The server's core job on one machine, with a real model: tokenize several requests, run them as one batch, detokenize each. vLLM adds a scheduler and paged memory on top.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import time
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+name = &quot;Qwen/Qwen2.5-0.5B-Instruct&quot;
+tok = AutoTokenizer.from_pretrained(name, padding_side=&quot;left&quot;)   <span class="c"># left-pad so all prompts end together</span>
+model = AutoModelForCausalLM.from_pretrained(name).eval()
+
+questions = [&quot;Say hi.&quot;, &quot;Name a fruit.&quot;, &quot;What is 2 + 2?&quot;]
+texts = [tok.apply_chat_template([{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: q}], add_generation_prompt=True, tokenize=False)
+         for q in questions]
+batch = tok(texts, padding=True, return_tensors=&quot;pt&quot;)             <span class="c"># <b>Step 1</b>: tokenize; <b>Step 4</b>: one batch</span>
+print(&quot;batch shape [requests, tokens]:&quot;, tuple(batch[&quot;input_ids&quot;].shape))
+
+start = time.time()
+out = model.generate(**batch, max_new_tokens=20, do_sample=False) <span class="c"># <b>Steps 3-4</b>: prefill, then decode steps</span>
+print(f&quot;3 requests in one batch: {time.time() - start:.1f}s&quot;)
+for q, row in zip(questions, out):
+    answer = tok.decode(row[batch[&quot;input_ids&quot;].shape[1]:], skip_special_tokens=True)   <span class="c"># <b>Step 5</b>: detokenize</span>
+    print(f&quot;{q!r:16} -> {answer.strip()!r}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">batch shape [requests, tokens]: (3, 37)
+3 requests in one batch: 1.7s
+'Say hi.'        -> 'Hello! How can I assist you today?'
+'Name a fruit.'  -> 'One of the most popular fruits is the apple. Apples are known for their sweet and juicy flavor'
+'What is 2 + 2?' -> '2 + 2 equals 4.'</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>vllm/entrypoints/openai/ (API layer)</code> · <code>vllm/v1/engine/ (engine loop)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A toy inference server loop: queue -> admit if KV memory fits -> prefill -> batched decode -> free.</span>
 from collections import deque
 
@@ -88,6 +137,7 @@ while requests or running:
             print(f&quot;step {step}: {rid} finished, {free} blocks free&quot;)
 print(f&quot;all 4 requests done in {step} decode steps&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">step 1: admit A: prefill 6 tokens, 3 blocks (9 free)
 step 1: admit B: prefill 10 tokens, 3 blocks (6 free)
 step 1: admit C: prefill 20 tokens, 6 blocks (0 free)
@@ -97,9 +147,10 @@ step 3: A finished, 4 blocks free
 step 4: C finished, 10 blocks free
 step 4: D finished, 12 blocks free
 all 4 requests done in 4 decode steps</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Start vLLM (<code>vllm serve &lt;model></code>) and read the startup log: model load time, KV-cache size in tokens, and the maximum concurrency it can hold.</li><li><code>curl localhost:8000/metrics | grep vllm</code> shows the scheduler live: running and waiting requests, KV-cache usage, time to first token.</li><li>Send 20 requests at once (e.g. with <code>xargs -P 20 curl ...</code>) and watch those numbers move, alongside <code>nvidia-smi</code> for GPU memory and utilization.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="callbacks-tracing.html">

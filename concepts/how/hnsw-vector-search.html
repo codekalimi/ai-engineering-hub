@@ -26,7 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 2 of 9</span>
         <h1>How does a vector database find nearest neighbours fast (HNSW)?</h1>
         <p class="tldr"><span class="label">In one line</span>Instead of comparing the query with every vector, it walks a layered graph of neighbour links: long jumps on sparse upper layers, then finer steps on denser lower layers.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-hnsw">
@@ -55,11 +55,74 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>It's approximate: very fast, with recall usually 95–99%+, tunable through the M and ef parameters.</li><li>Exact brute-force search is fine up to tens of thousands of vectors.</li><li>Other index types: IVF (cluster first, then search nearby clusters), often combined with product quantization to compress vectors.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">An HNSW index trades a little recall for a lot of speed; efSearch is the dial. pgvector equivalent: CREATE INDEX ... USING hnsw (embedding vector_cosine_ops); SET hnsw.ef_search = 100;</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import time
+import faiss
+import numpy as np
+
+rng = np.random.default_rng(0)
+d = 64
+data = rng.random((20000, d), dtype=np.float32)
+queries = rng.random((200, d), dtype=np.float32)
+
+index = faiss.IndexHNSWFlat(d, 32)           <span class="c"># M = 32 links per vector</span>
+index.add(data)
+exact = faiss.IndexFlatL2(d)                 <span class="c"># brute force, for the true answers</span>
+exact.add(data)
+_, truth = exact.search(queries, 10)
+
+for ef in (8, 32, 128):
+    index.hnsw.efSearch = ef                 <span class="c"># size of the candidate list at query time</span>
+    start = time.time()
+    _, found = index.search(queries, 10)
+    ms = (time.time() - start) * 1000
+    recall = np.mean([len(set(f) &amp; set(t)) / 10 for f, t in zip(found, truth)])
+    print(f&quot;efSearch={ef:3}: recall@10 {recall:.2f} in {ms:.0f} ms for {len(queries)} queries&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with faiss-cpu 1.16.0, numpy 2.5.5.</p>
+        <span class="label">What it printed</span><pre class="bts-out">efSearch=  8: recall@10 0.38 in 1 ms for 200 queries
+efSearch= 32: recall@10 0.74 in 1 ms for 200 queries
+efSearch=128: recall@10 0.97 in 3 ms for 200 queries</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">Inside the index FAISS built: why the upper layers are sparse. Each vector draws its top layer at random, so each layer has about 1/M of the vectors of the one below.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import faiss
+import numpy as np
+
+rng = np.random.default_rng(0)
+d, M, n = 64, 32, 20000
+index = faiss.IndexHNSWFlat(d, M)
+index.add(rng.random((n, d), dtype=np.float32))
+
+levels = faiss.vector_to_array(index.hnsw.levels)      <span class="c"># per vector: how many layers it lives on</span>
+print(&quot;top layer:&quot;, index.hnsw.max_level, &quot;| search starts at vector&quot;, index.hnsw.entry_point)
+for layer in range(levels.max() - 1, -1, -1):
+    print(f&quot;layer {layer}: {(levels > layer).sum():6} vectors&quot;)
+
+<span class="c"># <b>Step 1</b>: the level draw used on insert: floor(-ln(U) * mL), with mL = 1 / ln(M)</span>
+mL = 1 / np.log(M)
+drawn = np.floor(-np.log(rng.random(n)) * mL)
+print(&quot;same rule, simulated:&quot;, [int((drawn >= layer).sum()) for layer in range(int(drawn.max()), -1, -1)])
+<span class="c"># <b>Steps 2-4 (greedy descent, then a beam of size efSearch on layer 0)</b> run inside index.search()</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with faiss-cpu 1.16.0, numpy 2.5.5.</p>
+        <span class="label">What it printed</span><pre class="bts-out">top layer: 3 | search starts at vector 12586
+layer 3:      1 vectors
+layer 2:     14 vectors
+layer 1:    628 vectors
+layer 0:  20000 vectors
+same rule, simulated: [2, 28, 638, 20000]</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>faiss/impl/HNSW.cpp (random_level, search)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A small HNSW-style search: a sparse top layer for long jumps, a dense bottom layer for precision.</span>
 import math, random
 random.seed(7)
@@ -107,13 +170,15 @@ exact = sorted(bottom_ids, key=lambda i: math.dist(points[i], query))[:k]
 print(&quot;HNSW top-3: &quot;, sorted(cands, key=d)[:k], f&quot;({len(memo)} distance checks)&quot;)
 print(&quot;exact top-3:&quot;, exact, f&quot;({len(points)} distance checks)&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">top    layer: closest so far = point 160 at distance 29.0
 bottom layer: closest so far = point 243 at distance 0.5
 HNSW top-3:  [243, 107, 241] (63 distance checks)
 exact top-3: [243, 107, 241] (400 distance checks)</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>FAISS: <code>index = faiss.IndexHNSWFlat(dim, 32)</code>; change <code>index.hnsw.efSearch</code> and measure recall against <code>IndexFlatL2</code> (exact search) and query time.</li><li>pgvector: <code>CREATE INDEX ON items USING hnsw (embedding vector_cosine_ops)</code>, then <code>EXPLAIN ANALYZE</code> your query to confirm the index is used; tune <code>SET hnsw.ef_search = 100</code>.</li><li>hnswlib: <code>p.set_ef(k)</code>; plot recall vs latency as ef grows to see the trade-off.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="embeddings.html">

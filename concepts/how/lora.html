@@ -26,7 +26,7 @@
         <span class="eyebrow">Training &amp; fine-tuning · 2 of 5</span>
         <h1>How does LoRA fine-tuning work?</h1>
         <p class="tldr"><span class="label">In one line</span>The original weights are frozen; two small trainable matrices are added beside them, and only those are trained. Their product is a low-rank update to the original weights.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-lora">
@@ -63,11 +63,85 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>QLoRA keeps the frozen W in 4-bit, allowing fine-tuning of large models on one GPU.</li><li>Multi-LoRA serving runs many adapters on one base model.</li><li>Higher rank r means more capacity but more memory.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Wrap a model with PEFT: the base weights freeze and small adapters are added to the layers you name.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from peft import LoraConfig, get_peft_model
+from transformers import AutoModelForCausalLM
+
+model = AutoModelForCausalLM.from_pretrained(&quot;Qwen/Qwen2.5-0.5B-Instruct&quot;)
+config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05,
+                    target_modules=[&quot;q_proj&quot;, &quot;k_proj&quot;, &quot;v_proj&quot;, &quot;o_proj&quot;], task_type=&quot;CAUSAL_LM&quot;)
+model = get_peft_model(model, config)
+model.print_trainable_parameters()
+print(model.base_model.model.model.layers[0].self_attn.q_proj)     <span class="c"># the wrapped layer</span>
+<span class="c"># after training: model.save_pretrained(&quot;adapter/&quot;)  (a few MB)  or  model.merge_and_unload()</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with peft 0.22.0, transformers 5.24.0.</p>
+        <details class="lv-out"><summary>What it printed (16 lines)</summary><pre class="bts-out">trainable params: 2,162,688 || all params: 496,195,456 || trainable%: 0.4359
+lora.Linear(
+  (base_layer): Linear(in_features=896, out_features=896, bias=True)
+  (lora_dropout): ModuleDict(
+    (default): Dropout(p=0.05, inplace=False)
+  )
+  (lora_A): ModuleDict(
+    (default): Linear(in_features=896, out_features=16, bias=False)
+  )
+  (lora_B): ModuleDict(
+    (default): Linear(in_features=16, out_features=896, bias=False)
+  )
+  (lora_embedding_A): ParameterDict()
+  (lora_embedding_B): ParameterDict()
+  (lora_magnitude_vector): ModuleDict()
+)</pre></details>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">A LoRA layer written by hand around a real Qwen projection: frozen W, trainable A and B, output W x + (alpha/r) B A x. Then a training step and the merge.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+from transformers import AutoModelForCausalLM
+
+base = AutoModelForCausalLM.from_pretrained(&quot;Qwen/Qwen2.5-0.5B-Instruct&quot;, dtype=torch.float32).model.layers[0].self_attn.q_proj
+base.requires_grad_(False)                                         <span class="c"># <b>Step 1</b>: W is frozen</span>
+W_before = base.weight.detach().clone()
+
+class LoRALinear(torch.nn.Module):
+    def __init__(self, base, r=8, alpha=16):
+        super().__init__()
+        self.base, self.scale = base, alpha / r
+        self.A = torch.nn.Parameter(torch.randn(r, base.in_features) * 0.01)   <span class="c"># <b>Step 2</b>: down to rank r</span>
+        self.B = torch.nn.Parameter(torch.zeros(base.out_features, r))         <span class="c">#         back up (starts at 0)</span>
+    def forward(self, x):
+        return self.base(x) + self.scale * (x @ self.A.T @ self.B.T)          <span class="c"># <b>Step 3</b>: W x + B A x</span>
+
+layer = LoRALinear(base)
+x = torch.randn(2, base.in_features)
+print(&quot;at start, same as the base layer:&quot;, torch.allclose(layer(x), base(x)))
+trainable = sum(p.numel() for p in layer.parameters() if p.requires_grad)
+print(f&quot;trainable {trainable:,} of {trainable + base.weight.numel():,} weights ({trainable / base.weight.numel():.1%})&quot;)
+
+opt = torch.optim.AdamW([layer.A, layer.B], lr=1e-2)              <span class="c"># <b>Step 4</b>: only A and B are updated</span>
+loss = (layer(x) - torch.randn_like(layer(x))).pow(2).mean()
+loss.backward()
+opt.step()
+print(&quot;after one step - W changed:&quot;, not torch.equal(base.weight, W_before), &quot;| B changed:&quot;, bool(layer.B.abs().sum() > 0))
+
+merged = base.weight + layer.scale * (layer.B @ layer.A)          <span class="c"># <b>Step 5</b>: fold B A into W</span>
+print(&quot;merged layer gives the same output:&quot;, torch.allclose(x @ merged.T + (base.bias if base.bias is not None else 0), layer(x), atol=1e-4))
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0, transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">at start, same as the base layer: True
+trainable 14,336 of 817,152 weights (1.8%)
+after one step - W changed: False | B changed: True
+merged layer gives the same output: True</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>peft/tuners/lora/layer.py (Linear.forward, merge)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import random
 random.seed(0)
 
@@ -97,13 +171,15 @@ W_merged = [[W[i][j] + BA[i][j] for j in range(d)] for i in range(d)]
 same = all(abs(a - b) &lt; 1e-9 for a, b in zip(forward(x), matvec(W_merged, x)))
 print(&quot;merged W gives the same output as W + adapter:&quot;, same)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">before training the adapter changes nothing (B = 0): True
 this layer: full fine-tune 64 weights, LoRA 32 (50%)
 a 4096x4096 layer: full 16,777,216 weights, LoRA r=16 131,072 (0.78%)
 merged W gives the same output as W + adapter: True</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>PEFT: <code>model = get_peft_model(model, LoraConfig(r=16, lora_alpha=32, target_modules=[&quot;q_proj&quot;, &quot;v_proj&quot;]))</code>, then <code>model.print_trainable_parameters()</code> prints how few weights are trained.</li><li>Print one wrapped layer (e.g. a <code>q_proj</code>) to see the base weight plus the <code>lora_A</code> and <code>lora_B</code> modules attached to it.</li><li>After training, <code>model.merge_and_unload()</code> folds B·A into W; compare outputs before and after merging, as the program below does.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="sft.html">

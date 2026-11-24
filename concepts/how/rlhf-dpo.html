@@ -26,7 +26,7 @@
         <span class="eyebrow">Training &amp; fine-tuning · 3 of 5</span>
         <h1>How do RLHF and DPO (preference tuning) work?</h1>
         <p class="tldr"><span class="label">In one line</span>Both learn from comparisons where one answer is preferred over another. RLHF trains a reward model and optimizes against it; DPO trains directly on the preference pairs.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-rlhf-dpo">
@@ -63,11 +63,67 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>DPO is simpler and more stable, so it's widely used; RLHF can be more powerful but is harder to tune.</li><li>Preference data teaches style, helpfulness and safety, not new knowledge.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Preference tuning with TRL's DPOTrainer on (prompt, chosen, rejected) data. beta controls how far the model may move from where it started.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from datasets import load_dataset
+from trl import DPOConfig, DPOTrainer
+
+dataset = load_dataset(&quot;trl-lib/ultrafeedback_binarized&quot;, split=&quot;train&quot;)   <span class="c"># prompt / chosen / rejected</span>
+trainer = DPOTrainer(
+    model=&quot;Qwen/Qwen2.5-0.5B-Instruct&quot;,
+    train_dataset=dataset,
+    args=DPOConfig(output_dir=&quot;qwen-dpo&quot;, beta=0.1, learning_rate=5e-7),
+)
+trainer.train()      <span class="c"># logs rewards/chosen, rewards/rejected and rewards/margins - margins should rise</span>
+</pre></div>
+        <p class="lv-test checked"><b>Checked, not run:</b> needs a GPU and hours of training; syntax and imports were checked.</p>
+        
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">The DPO loss computed from a real model's log-probabilities of a chosen and a rejected answer: the same formula DPOTrainer uses.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+import torch.nn.functional as F
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+name = &quot;Qwen/Qwen2.5-0.5B-Instruct&quot;
+tok = AutoTokenizer.from_pretrained(name)
+policy = AutoModelForCausalLM.from_pretrained(name).eval()
+
+def answer_logprob(model, prompt, answer):                     <span class="c"># log p(answer | prompt), summed over tokens</span>
+    p = tok(prompt, return_tensors=&quot;pt&quot;).input_ids
+    a = tok(answer, add_special_tokens=False, return_tensors=&quot;pt&quot;).input_ids
+    with torch.no_grad():
+        logits = model(torch.cat([p, a], dim=1)).logits[0, p.shape[1] - 1:-1].float()
+    return logits.log_softmax(-1).gather(1, a[0][:, None]).sum()
+
+prompt = &quot;Q: How do I reset my password?\nA:&quot;
+chosen = &quot; Open Settings, choose Security, then Reset password.&quot;       <span class="c"># <b>Step 1</b>: preferred</span>
+rejected = &quot; Passwords are important for security.&quot;                     <span class="c"># <b>Step 1</b>: not preferred</span>
+pc, pr = answer_logprob(policy, prompt, chosen), answer_logprob(policy, prompt, rejected)
+print(f&quot;log p(chosen) {pc:.1f}, log p(rejected) {pr:.1f}&quot;)
+
+beta = 0.1
+ref_c, ref_r = pc.clone(), pr.clone()             <span class="c"># at the start, the reference model IS the policy</span>
+for shift in (0.0, 2.0, 5.0):                      <span class="c"># pretend training moved chosen up and rejected down</span>
+    margin = beta * ((pc + shift - ref_c) - (pr - shift - ref_r))
+    loss = -F.logsigmoid(margin)                   <span class="c"># <b>Step 4</b>: the DPO loss</span>
+    print(f&quot;after shifting by {shift}: margin {margin:.2f}, loss {loss:.3f}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0, transformers 5.24.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">log p(chosen) -30.0, log p(rejected) -17.6
+after shifting by 0.0: margin 0.00, loss 0.693
+after shifting by 2.0: margin 0.40, loss 0.513
+after shifting by 5.0: margin 1.00, loss 0.313</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>trl/trainer/dpo_trainer.py (dpo_loss)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import math
 
 <span class="c"># <b>Step 1</b>: one preference pair - same prompt, a chosen (better) and a rejected answer.</span>
@@ -90,14 +146,16 @@ for step in range(1, 6):
 <span class="c"># <b>Step 2-3 (RLHF)</b> instead trains a reward model on such pairs and runs RL (e.g. PPO) against it,</span>
 <span class="c"># with a KL penalty that keeps the model near the reference - the role beta plays here.</span>
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">step 1: margin +0.000  loss 0.693  logp chosen -11.75  rejected -11.25
 step 2: margin +0.050  loss 0.668  logp chosen -11.51  rejected -11.49
 step 3: margin +0.099  loss 0.645  logp chosen -11.27  rejected -11.73
 step 4: margin +0.146  loss 0.623  logp chosen -11.04  rejected -11.96
 step 5: margin +0.193  loss 0.601  logp chosen -10.81  rejected -12.19</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>TRL <code>DPOTrainer</code> logs <code>rewards/chosen</code>, <code>rewards/rejected</code> and <code>rewards/margins</code>: the margin should grow during training, like below.</li><li>Look at a preference dataset on the Hugging Face Hub (columns <code>prompt</code>, <code>chosen</code>, <code>rejected</code>) to see what the training signal actually is.</li><li>If outputs get longer and longer after tuning, check whether the &quot;chosen&quot; answers in your data are simply longer: a common bias.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="lora.html">

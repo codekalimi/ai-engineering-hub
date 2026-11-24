@@ -26,7 +26,7 @@
         <span class="eyebrow">Training &amp; fine-tuning · 4 of 5</span>
         <h1>How does distillation work?</h1>
         <p class="tldr"><span class="label">In one line</span>A large &quot;teacher&quot; model generates high-quality outputs, and a smaller &quot;student&quot; model is fine-tuned on them, inheriting much of the teacher's ability on that task at a fraction of the cost.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-distillation">
@@ -55,11 +55,80 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Works best for narrow, high-volume tasks.</li><li>Check the teacher provider's terms; some restrict training other models on outputs.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Build the distillation dataset: run real prompts through the teacher (with structured output so labels are clean), filter, save JSONL for fine-tuning a smaller model.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import json
+from typing import Literal
+
+from pydantic import BaseModel
+from langchain.chat_models import init_chat_model
+
+class Label(BaseModel):
+    category: Literal[&quot;billing&quot;, &quot;technical&quot;]
+    confident: bool
+
+teacher = init_chat_model(&quot;anthropic:claude-opus-5-5&quot;).with_structured_output(Label)   <span class="c"># <b>Step 2</b></span>
+prompts = [&quot;I was charged twice&quot;, &quot;The app crashes on login&quot;, &quot;Something is wrong with my plan&quot;]  <span class="c"># <b>Step 1</b></span>
+
+with open(&quot;distill.jsonl&quot;, &quot;w&quot;) as f:
+    for p in prompts:
+        label = teacher.invoke(f&quot;Classify this support ticket: {p}&quot;)
+        if not label.confident:                                    <span class="c"># <b>Step 3</b>: drop doubtful labels</span>
+            print(&quot;skipped:&quot;, p)
+            continue
+        f.write(json.dumps({&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: p},
+                                         {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: label.category}]}) + &quot;\n&quot;)
+print(open(&quot;distill.jsonl&quot;).read())
+<span class="c"># <b>Step 4</b>: fine-tune a small model on distill.jsonl (see the SFT page); <b>Step 5</b>: evaluate both on held-out data</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">skipped: Something is wrong with my plan
+{&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;I was charged twice&quot;}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;billing&quot;}]}
+{&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;The app crashes on login&quot;}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;technical&quot;}]}</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">Soft-label distillation, when you can see the teacher's probabilities: the student matches the teacher's whole distribution (temperature-softened), not just its top answer.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+classes = [&quot;billing&quot;, &quot;technical&quot;, &quot;account&quot;, &quot;other&quot;]
+teacher_logits = torch.tensor([[4.0, 1.5, 2.5, -1.0]])          <span class="c"># teacher: billing, but account is close</span>
+student_logits = torch.zeros(1, 4, requires_grad=True)           <span class="c"># student starts knowing nothing</span>
+opt = torch.optim.SGD([student_logits], lr=1.0)
+T = 2.0                                                          <span class="c"># temperature softens both distributions</span>
+
+for step in range(1, 6):
+    soft_targets = F.softmax(teacher_logits / T, dim=-1)
+    loss = F.kl_div(F.log_softmax(student_logits / T, dim=-1), soft_targets, reduction=&quot;batchmean&quot;) * T * T
+    opt.zero_grad()
+    loss.backward()
+    opt.step()
+    print(f&quot;step {step}: KL loss {loss.item():.3f}&quot;)
+
+def show(logits):
+    return {c: round(p, 2) for c, p in zip(classes, F.softmax(logits, -1)[0].tolist())}
+print(&quot;teacher:&quot;, show(teacher_logits))
+print(&quot;student:&quot;, show(student_logits.detach()))     <span class="c"># learns the ranking, including &quot;account is close&quot;</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">step 1: KL loss 1.110
+step 2: KL loss 0.633
+step 3: KL loss 0.375
+step 4: KL loss 0.239
+step 5: KL loss 0.164
+teacher: {'billing': 0.76, 'technical': 0.06, 'account': 0.17, 'other': 0.01}
+student: {'billing': 0.72, 'technical': 0.08, 'account': 0.16, 'other': 0.04}</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>Hinton et al. 2015, 'Distilling the Knowledge in a Neural Network'</code> · <code>trl/trainer/gkd_trainer.py</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># <b>Step 1</b>: realistic prompts for the task (classifying support tickets)</span>
 prompts = [&quot;refund not received&quot;, &quot;app crashes on login&quot;, &quot;charged twice&quot;, &quot;cannot reset password&quot;,
            &quot;invoice missing&quot;, &quot;screen freezes&quot;, &quot;card declined&quot;, &quot;login code never arrives&quot;]
@@ -91,14 +160,16 @@ for p in test:
 agree = sum(student(p) == teacher(p) for p in test)
 print(f&quot;student agrees with the teacher on {agree}/{len(test)} - at a fraction of the cost per request&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">'refund still pending'           teacher=billing   student=billing
 'crashes after update'           teacher=technical student=technical
 'charged for a cancelled plan'   teacher=billing   student=billing
 'password email not arriving'    teacher=technical student=billing
 student agrees with the teacher on 3/4 - at a fraction of the cost per request</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Keep the teacher’s outputs as a dataset (JSONL of prompt and response) and read a sample by hand before training: the student copies mistakes too.</li><li>Evaluate teacher and student on the same held-out set and report both quality and cost/latency per request: that ratio is the business case.</li><li>Check the teacher provider’s terms: some forbid using outputs to train competing models.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="rlhf-dpo.html">

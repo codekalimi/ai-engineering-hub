@@ -26,7 +26,7 @@
         <span class="eyebrow">Quality, safety &amp; operations · 1 of 6</span>
         <h1>How does an LLM evaluation pipeline work?</h1>
         <p class="tldr"><span class="label">In one line</span>A fixed dataset is run through the new version of the app, each output is scored by code checks and an LLM judge, and the scores are compared with the current version before deploying.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-eval-pipeline">
@@ -55,11 +55,74 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Run it in CI on every prompt or model change.</li><li>Keep adding production failures to the dataset so they can't come back.</li><li>Track cost and latency alongside quality.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Run your app over a stored dataset with evaluators, as an experiment you can compare with the last one. LangSmith shown; Braintrust, promptfoo and others work the same way.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langsmith import Client
+
+client = Client()
+
+def target(inputs: dict) -> dict:              <span class="c"># your app, called once per dataset example</span>
+    return {&quot;answer&quot;: my_app(inputs[&quot;question&quot;])}
+
+def correct(outputs: dict, reference_outputs: dict) -> bool:    <span class="c"># a programmatic evaluator</span>
+    return reference_outputs[&quot;answer&quot;].lower() in outputs[&quot;answer&quot;].lower()
+
+results = client.evaluate(
+    target,
+    data=&quot;support-bot-golden&quot;,                 <span class="c"># <b>Step 1</b>: a dataset built from real traffic</span>
+    evaluators=[correct],                      <span class="c"># <b>Step 3</b>: checks (and LLM judges)</span>
+    experiment_prefix=&quot;prompt-v2&quot;,             <span class="c"># <b>Step 4</b>: compare with the previous experiment in the UI</span>
+)
+</pre></div>
+        <p class="lv-test checked"><b>Checked, not run:</b> needs a LangSmith account and API key; syntax and imports were checked.</p>
+        
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What evaluate() does, minus the UI: run each case, score it, compare case by case with the stored baseline, and fail the build on regressions (exit code for CI).</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import json
+import sys
+
+dataset = [  <span class="c"># <b>Step 1</b></span>
+    {&quot;id&quot;: &quot;math-1&quot;, &quot;question&quot;: &quot;What is 15% of 200?&quot;, &quot;expect&quot;: &quot;30&quot;},
+    {&quot;id&quot;: &quot;json-1&quot;, &quot;question&quot;: &quot;Return JSON with key ok&quot;, &quot;expect&quot;: '{&quot;ok&quot;'},
+    {&quot;id&quot;: &quot;refund-1&quot;, &quot;question&quot;: &quot;Refund window?&quot;, &quot;expect&quot;: &quot;30 days&quot;},
+    {&quot;id&quot;: &quot;fr-1&quot;, &quot;question&quot;: &quot;Say hello in French&quot;, &quot;expect&quot;: &quot;bonjour&quot;},
+]
+def app_v2(q):     <span class="c"># the candidate version (stands in for your chain or agent)</span>
+    return {&quot;What is 15% of 200?&quot;: &quot;The answer is 30.&quot;, &quot;Return JSON with key ok&quot;: 'Sure! {&quot;ok&quot;: true}',
+            &quot;Refund window?&quot;: &quot;You have 30 days.&quot;, &quot;Say hello in French&quot;: &quot;Bonjour&quot;}[q]
+
+baseline = {&quot;math-1&quot;: True, &quot;json-1&quot;: True, &quot;refund-1&quot;: True, &quot;fr-1&quot;: False}   <span class="c"># last release's results</span>
+
+results = {}
+for case in dataset:                                           <span class="c"># <b>Steps 2-3</b>: run and score</span>
+    output = app_v2(case[&quot;question&quot;])
+    results[case[&quot;id&quot;]] = case[&quot;expect&quot;].lower() in output.lower() and not output.startswith(&quot;Sure!&quot;)
+print(json.dumps(results))
+
+regressions = [k for k, ok in results.items() if baseline[k] and not ok]    <span class="c"># <b>Step 4</b>: case by case</span>
+fixed = [k for k, ok in results.items() if ok and not baseline[k]]
+print(f&quot;pass rate {sum(results.values())}/{len(results)} (baseline {sum(baseline.values())}/{len(baseline)})&quot;)
+print(&quot;fixed:&quot;, fixed, &quot;| regressions:&quot;, regressions)
+exit_code = 1 if regressions else 0                            <span class="c"># <b>Step 5</b>: CI blocks the release</span>
+print(&quot;exit code&quot;, exit_code)
+sys.exit(0)   <span class="c"># (the real script would sys.exit(exit_code))</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with Python 3.12.14.</p>
+        <span class="label">What it printed</span><pre class="bts-out">{&quot;math-1&quot;: true, &quot;json-1&quot;: false, &quot;refund-1&quot;: true, &quot;fr-1&quot;: true}
+pass rate 3/4 (baseline 3/4)
+fixed: ['fr-1'] | regressions: ['json-1']
+exit code 1</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langsmith/evaluation/_runner.py</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># <b>Step 1</b>: a dataset of real cases, each with a check</span>
 dataset = [
     {&quot;q&quot;: &quot;What is 15% of 200?&quot;, &quot;check&quot;: lambda a: &quot;30&quot; in a},
@@ -85,15 +148,17 @@ print(f&quot;pass rate: v1 {sum(r[1] for r in results)}/4, v2 {sum(r[2] for r in
 if any(old and not new for _, old, new in results):
     print(&quot;release blocked: fix the regression first&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">What is 15% of 200?        v1=pass  v2=pass  
 Return JSON with key ok    v1=pass  v2=FAIL  REGRESSION
 Refund window?             v1=pass  v2=pass  
 Say hello in French        v1=FAIL  v2=pass  fixed
 pass rate: v1 3/4, v2 3/4
 release blocked: fix the regression first</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>promptfoo: <code>npx promptfoo@latest init</code>, list test cases and assertions in its YAML, <code>npx promptfoo eval</code>, then <code>npx promptfoo view</code> for a side-by-side comparison.</li><li>LangSmith: create a dataset from real traces and run <code>evaluate(...)</code> with your evaluators; compare two experiments case by case.</li><li>Run it in CI on every prompt or model change, and fail the build on regressions of cases that used to pass.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="distributed-training.html">

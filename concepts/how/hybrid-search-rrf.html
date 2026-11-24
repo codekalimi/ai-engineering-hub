@@ -26,7 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 4 of 9</span>
         <h1>How does hybrid search with reciprocal rank fusion (RRF) work?</h1>
         <p class="tldr"><span class="label">In one line</span>Keyword search and vector search run separately, and their two ranked lists are merged by rewarding documents that rank highly in either one.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-hybrid">
@@ -63,18 +63,72 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Hybrid search fixes the classic embedding weakness: product codes, names, error IDs.</li><li>Some databases support hybrid search natively; otherwise run both searches and fuse in code.</li><li>Weighted fusion of normalized scores is an alternative to RRF.</li></ul></div>
         </div>
-        <pre>def rrf(*ranked_lists, k=60):
-    scores = {}
-    for ranking in ranked_lists:
-        for rank, doc_id in enumerate(ranking, start=1):
-            scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + rank)
-    return sorted(scores, key=scores.get, reverse=True)
-
-rrf([&quot;d3&quot;, &quot;d1&quot;, &quot;d7&quot;], [&quot;d1&quot;, &quot;d9&quot;, &quot;d3&quot;])   # -> ['d1', 'd3', 'd9', 'd7']</pre>
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Keyword search (BM25) and vector search, fused with reciprocal rank fusion. Search engines like Elasticsearch, OpenSearch, Weaviate and Qdrant offer the same as one query.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.embeddings import init_embeddings
+from langchain_classic.retrievers import EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
+from langchain_core.vectorstores import InMemoryVectorStore
+
+texts = [&quot;Reset your password from the account settings page.&quot;,
+         &quot;Error code E-4021 means the payment token expired.&quot;,
+         &quot;How to change login credentials and recover access.&quot;,
+         &quot;Payment failed because the card was declined.&quot;]
+
+keyword = BM25Retriever.from_texts(texts, k=3)
+vector = InMemoryVectorStore.from_texts(texts, init_embeddings(&quot;openai:text-embedding-3-small&quot;)).as_retriever(search_kwargs={&quot;k&quot;: 3})
+hybrid = EnsembleRetriever(retrievers=[keyword, vector], weights=[0.5, 0.5])
+
+for doc in hybrid.invoke(&quot;login problems after error E-4021&quot;):
+    print(doc.page_content)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langchain-classic 1.1.0, langchain-community 0.4.2, langchain-core 1.8.4 · with a local embedding model (all-MiniLM-L6-v2) in place of the embedding API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">How to change login credentials and recover access.
+Error code E-4021 means the payment token expired.
+Payment failed because the card was declined.
+Reset your password from the account settings page.</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What EnsembleRetriever does: run each retriever, then weighted RRF on the ranks (weight / (rank + 60)). Computed by hand and compared.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.embeddings import init_embeddings
+from langchain_classic.retrievers import EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
+from langchain_core.vectorstores import InMemoryVectorStore
+
+texts = [&quot;Reset your password from the account settings page.&quot;,
+         &quot;Error code E-4021 means the payment token expired.&quot;,
+         &quot;How to change login credentials and recover access.&quot;,
+         &quot;Payment failed because the card was declined.&quot;]
+query = &quot;login problems after error E-4021&quot;
+keyword = BM25Retriever.from_texts(texts, k=3)
+vector = InMemoryVectorStore.from_texts(texts, init_embeddings(&quot;openai:text-embedding-3-small&quot;)).as_retriever(search_kwargs={&quot;k&quot;: 3})
+
+rankings = [keyword.invoke(query), vector.invoke(query)]      <span class="c"># <b>Steps 1-2</b>: two separate rankings</span>
+for name, docs in zip([&quot;BM25&quot;, &quot;vector&quot;], rankings):
+    print(f&quot;{name:6}:&quot;, [texts.index(d.page_content) for d in docs])
+
+scores = {}                                                    <span class="c"># <b>Step 3</b>: RRF on ranks, not scores</span>
+for weight, docs in zip([0.5, 0.5], rankings):
+    for rank, d in enumerate(docs, start=1):
+        scores[d.page_content] = scores.get(d.page_content, 0) + weight / (rank + 60)
+by_hand = sorted(scores, key=scores.get, reverse=True)
+library = [d.page_content for d in EnsembleRetriever(retrievers=[keyword, vector], weights=[0.5, 0.5]).invoke(query)]
+print(&quot;fused:&quot;, [texts.index(t) for t in by_hand], &quot;| same as EnsembleRetriever:&quot;, by_hand == library)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langchain-classic 1.1.0, langchain-community 0.4.2, langchain-core 1.8.4 · with a local embedding model (all-MiniLM-L6-v2) in place of the embedding API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">BM25  : [2, 1, 3]
+vector: [1, 2, 0]
+fused: [2, 1, 3, 0] | same as EnsembleRetriever: True</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langchain_classic/retrievers/ensemble.py (weighted_reciprocal_rank)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import math, re
 
 docs = {
@@ -122,15 +176,17 @@ print(&quot;vector ranking:&quot;, vector_ranking)
 for d, s in rrf(keyword_ranking, vector_ranking):
     print(f&quot;  {d} {s:.4f}  {docs[d]}&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">BM25 ranking:   ['d2']
 vector ranking: ['d3', 'd1', 'd4', 'd2']
   d2 0.0320  error code E-4021 means the payment token expired
   d3 0.0164  how to change login credentials and recover access
   d1 0.0161  reset your password from the account settings page
   d4 0.0159  payment failed because the card was declined</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>LangChain: combine a <code>BM25Retriever</code> and a vector-store retriever in an <code>EnsembleRetriever(retrievers=[bm25, vector], weights=[0.5, 0.5])</code>, which fuses with RRF.</li><li>Elasticsearch/OpenSearch, Weaviate, Qdrant and pgvector setups all offer hybrid queries; log both ranked lists before fusion to see what each one contributes.</li><li>Test with an exact code or ID (like an error code): keyword search finds it, embeddings often don’t.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="rag.html">

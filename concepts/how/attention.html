@@ -26,7 +26,7 @@
         <span class="eyebrow">Inside the LLM · 3 of 8</span>
         <h1>How does attention work?</h1>
         <p class="tldr"><span class="label">In one line</span>Each token makes a query, a key and a value. It compares its query with earlier tokens' keys to decide how much to pay attention to each, then takes a weighted mix of their values.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-attention">
@@ -55,19 +55,70 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Prefill cost grows with the square of the sequence length, which is why very long prompts are expensive.</li><li>Grouped-query attention (GQA) shares keys and values across heads, shrinking the KV cache.</li><li>FlashAttention computes exactly the same result with far less memory traffic.</li></ul></div>
         </div>
-        <pre>import numpy as np
-
-def attention(Q, K, V):
-    d = Q.shape[-1]
-    scores = Q @ K.T / np.sqrt(d)
-    mask = np.triu(np.ones_like(scores), k=1) * -1e9   # causal mask
-    w = np.exp(scores + mask)
-    w = w / w.sum(axis=-1, keepdims=True)              # softmax
-    return w @ V</pre>
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">You rarely write attention yourself: models call PyTorch's fused kernel, which picks FlashAttention-style implementations when the hardware supports them.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import torch
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+batch, heads, tokens, head_dim = 1, 2, 4, 8
+q, k, v = (torch.randn(batch, heads, tokens, head_dim) for _ in range(3))
+
+out = F.scaled_dot_product_attention(q, k, v, is_causal=True)   <span class="c"># one fused call</span>
+print(out.shape)   <span class="c"># same shape as q: one new vector per token per head</span>
+<span class="c"># In a model config you only choose the implementation, e.g.</span>
+<span class="c"># AutoModelForCausalLM.from_pretrained(name, attn_implementation=&quot;sdpa&quot;)</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">torch.Size([1, 2, 4, 8])</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">The same computation by hand, as it happens inside every layer: projections, scaled scores, causal mask, softmax, weighted sum, heads.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import math
+import torch
+import torch.nn.functional as F
+
+torch.manual_seed(0)
+B, T, d_model, H = 1, 4, 16, 2
+hd = d_model // H
+x = torch.randn(B, T, d_model)                                   <span class="c"># 4 token vectors</span>
+W_q, W_k, W_v, W_o = (torch.nn.Linear(d_model, d_model, bias=False) for _ in range(4))
+
+def heads(t):                                                    <span class="c"># <b>Step 6</b>: split into H heads</span>
+    return t.view(B, T, H, hd).transpose(1, 2)
+
+q, k, v = heads(W_q(x)), heads(W_k(x)), heads(W_v(x))            <span class="c"># <b>Step 1</b>: query, key, value</span>
+scores = q @ k.transpose(-2, -1) / math.sqrt(hd)                 <span class="c"># <b>Step 2</b>: dot products / sqrt(d)</span>
+future = torch.triu(torch.ones(T, T, dtype=torch.bool), diagonal=1)
+scores = scores.masked_fill(future, float(&quot;-inf&quot;))               <span class="c"># <b>Step 3</b>: causal mask</span>
+weights = scores.softmax(dim=-1)                                 <span class="c"># <b>Step 4</b>: rows add up to 1</span>
+out = weights @ v                                                <span class="c"># <b>Step 5</b>: weighted sum of values</span>
+
+print(&quot;head 0 weights (row = token, column = token it looks at):&quot;)
+print(weights[0, 0].detach().numpy().round(2))
+same = torch.allclose(out, F.scaled_dot_product_attention(q, k, v, is_causal=True), atol=1e-6)
+print(&quot;same as the fused kernel:&quot;, same)
+y = W_o(out.transpose(1, 2).reshape(B, T, d_model))              <span class="c"># join the heads, project back</span>
+print(&quot;layer output:&quot;, tuple(y.shape))
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with torch 2.15.0.</p>
+        <span class="label">What it printed</span><pre class="bts-out">head 0 weights (row = token, column = token it looks at):
+[[1.   0.   0.   0.  ]
+ [0.55 0.45 0.   0.  ]
+ [0.29 0.36 0.35 0.  ]
+ [0.32 0.13 0.26 0.29]]
+same as the fused kernel: True
+layer output: (1, 4, 16)</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>transformers/models/qwen2/modeling_qwen2.py (eager_attention_forward)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Single-head causal attention over 3 tokens, written out by hand.</span>
 import math
 
@@ -95,12 +146,14 @@ for i, tok in enumerate(tokens):
     print(f&quot;{tok:>4} attends to [{looks}] -> output {[round(x, 2) for x in out]}&quot;)
 <span class="c"># <b>Step 6</b>: multi-head attention = this, several times in parallel with different Q/K/V matrices</span>
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out"> The attends to [The 1.00] -> output [1.0, 0.0]
  cat attends to [The 0.33, cat 0.67] -> output [0.33, 0.67]
  sat attends to [The 0.26, cat 0.30, sat 0.43] -> output [0.48, 0.52]</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Hugging Face: load the model with <code>attn_implementation=&quot;eager&quot;</code>, call <code>model(**inputs, output_attentions=True)</code> and read <code>.attentions</code>: one tensor per layer, shaped [batch, heads, tokens, tokens].</li><li>Visualize it with the <code>bertviz</code> package (<code>head_view(attentions, tokens)</code>) to see which words each head looks at.</li><li>Read a minimal implementation such as Karpathy’s nanoGPT <code>model.py</code> (CausalSelfAttention): about 30 lines, the same maths as below.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="tokenization.html">

@@ -26,7 +26,7 @@
         <span class="eyebrow">Tools &amp; agents · 4 of 7</span>
         <h1>How does a multi-agent supervisor work?</h1>
         <p class="tldr"><span class="label">In one line</span>A supervisor agent looks at the task and hands each piece to a specialist agent with its own tools and instructions, collecting results until the job is done.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-supervisor">
@@ -63,11 +63,103 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Use it when tasks need clearly different skills or tools, or one agent's context would get too big.</li><li>Costs: more tokens, latency and failure points, and harder debugging.</li><li>Start with one agent and good tools; split only when evals show it helps.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">The simplest multi-agent setup: specialists are agents, wrapped as tools of a supervisor agent.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+from langchain.tools import tool
+
+model = init_chat_model(&quot;anthropic:claude-opus-5-5&quot;)
+
+@tool
+def get_financials(quarter: str) -> str:
+    &quot;&quot;&quot;Revenue figures for a quarter.&quot;&quot;&quot;
+    return &quot;Q3 revenue 4.2M (Q2: 3.75M)&quot;
+
+researcher = create_agent(model, [get_financials], system_prompt=&quot;You find numbers. Be precise.&quot;)
+writer = create_agent(model, [], system_prompt=&quot;You write short, friendly team emails.&quot;)
+
+@tool
+def ask_researcher(question: str) -> str:
+    &quot;&quot;&quot;Ask the research agent for company numbers.&quot;&quot;&quot;
+    return researcher.invoke({&quot;messages&quot;: [(&quot;user&quot;, question)]})[&quot;messages&quot;][-1].content
+
+@tool
+def ask_writer(brief: str) -> str:
+    &quot;&quot;&quot;Ask the writing agent to draft text from a brief.&quot;&quot;&quot;
+    return writer.invoke({&quot;messages&quot;: [(&quot;user&quot;, brief)]})[&quot;messages&quot;][-1].content
+
+supervisor = create_agent(model, [ask_researcher, ask_writer],
+                          system_prompt=&quot;Coordinate the specialists to complete the task, then reply.&quot;)
+result = supervisor.invoke({&quot;messages&quot;: [(&quot;user&quot;, &quot;Email the team a summary of Q3 revenue&quot;)]})
+for m in result[&quot;messages&quot;]:
+    print(f&quot;{m.type:5}&quot;, m.tool_calls[0][&quot;name&quot;] if getattr(m, &quot;tool_calls&quot;, None) else m.content)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">human Email the team a summary of Q3 revenue
+ai    ask_researcher
+tool  Q3 revenue was 4.2M, up 12% on Q2.
+ai    ask_writer
+tool  Team - Q3 revenue reached 4.2M, up 12% on Q2. Great work!
+ai    Here's the email: 'Team - Q3 revenue reached 4.2M, up 12% on Q2. Great work!'</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">A supervisor as an explicit LangGraph graph: a router node picks the next specialist with structured output and hands over control with Command(goto=...).</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from typing import Literal
+
+from pydantic import BaseModel
+from langchain.chat_models import init_chat_model
+from langchain.messages import AIMessage, HumanMessage, SystemMessage
+from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.types import Command
+
+model = init_chat_model(&quot;anthropic:claude-opus-5-5&quot;)
+
+class Route(BaseModel):
+    next: Literal[&quot;researcher&quot;, &quot;writer&quot;, &quot;FINISH&quot;]
+    instruction: str
+
+router = model.with_structured_output(Route)
+
+def supervisor(state: MessagesState) -> Command[Literal[&quot;researcher&quot;, &quot;writer&quot;, &quot;__end__&quot;]]:
+    <span class="c"># <b>Step 2</b>: decide which specialist acts next</span>
+    decision = router.invoke([SystemMessage(&quot;Route the task to researcher or writer, or FINISH.&quot;)] + state[&quot;messages&quot;])
+    print(f&quot;supervisor -> {decision.next}&quot; + (f&quot;: {decision.instruction}&quot; if decision.instruction else &quot;&quot;))
+    if decision.next == &quot;FINISH&quot;:
+        return Command(goto=END)                                      <span class="c"># <b>Step 4</b></span>
+    return Command(goto=decision.next, update={&quot;messages&quot;: [HumanMessage(decision.instruction, name=&quot;supervisor&quot;)]})
+
+def specialist(name, prompt):
+    def node(state: MessagesState) -> Command[Literal[&quot;supervisor&quot;]]:
+        reply = model.invoke([SystemMessage(prompt)] + state[&quot;messages&quot;])   <span class="c"># <b>Step 3</b>: its own prompt (and tools)</span>
+        print(f&quot;  {name}: {reply.content}&quot;)
+        return Command(goto=&quot;supervisor&quot;, update={&quot;messages&quot;: [AIMessage(reply.content, name=name)]})
+    return node
+
+graph = StateGraph(MessagesState)
+graph.add_node(&quot;supervisor&quot;, supervisor)
+graph.add_node(&quot;researcher&quot;, specialist(&quot;researcher&quot;, &quot;You find numbers.&quot;))
+graph.add_node(&quot;writer&quot;, specialist(&quot;writer&quot;, &quot;You write short emails.&quot;))
+graph.add_edge(START, &quot;supervisor&quot;)
+app = graph.compile()
+app.invoke({&quot;messages&quot;: [(&quot;user&quot;, &quot;Email the team a summary of Q3 revenue&quot;)]})
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langgraph 1.2.24 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">supervisor -> researcher: Find Q3 revenue and growth.
+  researcher: Q3 revenue was 4.2M, up 12% on Q2.
+supervisor -> writer: Write a two-line team email with those numbers.
+  writer: Team - Q3 revenue reached 4.2M, up 12%. Great work!
+supervisor -> FINISH</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langgraph/types.py (Command)</code> · <code>langgraph/graph/state.py (StateGraph)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A supervisor is an LLM whose &quot;tools&quot; are other agents. Everything is stubbed so the routing is visible.</span>
 def research_agent(task):
     return &quot;Q3 revenue was 4.2M, up 12% on Q2.&quot;
@@ -97,15 +189,17 @@ for turn in range(1, 6):
     results[choice] = AGENTS[choice](instruction)
     print(f&quot;        {choice} reports: {results[choice]}&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">turn 1: supervisor -> researcher: 'find the Q3 revenue numbers'
         researcher reports: Q3 revenue was 4.2M, up 12% on Q2.
 turn 2: supervisor -> writer: 'write a short team email using: Q3 revenue was 4.2M, up 12% on Q2.'
         writer reports: Draft: 'Team - Q3 revenue reached 4.2M (+12%). Great work!'
 turn 3: supervisor -> FINISH
 final: Draft: 'Team - Q3 revenue reached 4.2M (+12%). Great work!'</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>LangGraph: <code>graph.stream(inputs, stream_mode=&quot;updates&quot;, subgraphs=True)</code> prints which agent (node or subgraph) ran at each step and what it returned.</li><li>Draw the graph: <code>print(graph.get_graph().draw_mermaid())</code>, then paste it into any Mermaid viewer.</li><li>In LangSmith, each specialist appears as its own branch of the trace, so you can see every routing decision and its cost.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="mcp.html">

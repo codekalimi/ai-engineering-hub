@@ -26,7 +26,7 @@
         <span class="eyebrow">Retrieval &amp; RAG · 9 of 9</span>
         <h1>How does text-to-SQL work?</h1>
         <p class="tldr"><span class="label">In one line</span>The model gets the database schema and the question, writes a SQL query, your code runs it safely, and the model turns the result rows into an answer.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-text-to-sql">
@@ -55,11 +55,80 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Use this instead of RAG when the answer needs aggregation (totals, counts, trends).</li><li>For big schemas, retrieve only the relevant tables first.</li><li>Never let the model's SQL run with permissions the user doesn't have.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">An agent with one read-only SQL tool. The first query fails, the error goes back, the model fixes it: the loop from the diagram, live.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import sqlite3
+from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+from langchain.tools import tool
+
+with sqlite3.connect(&quot;shop.db&quot;) as db:
+    db.executescript(&quot;&quot;&quot;CREATE TABLE orders (id INTEGER, customer TEXT, amount REAL);
+        INSERT INTO orders VALUES (1,'acme',120), (2,'globex',80), (3,'acme',200);&quot;&quot;&quot;)
+
+@tool
+def run_sql(query: str) -> str:
+    &quot;&quot;&quot;Run one read-only SQLite SELECT on table orders(id, customer, amount). Returns rows or an error.&quot;&quot;&quot;
+    if not query.lstrip().lower().startswith(&quot;select&quot;):
+        return &quot;Error: only SELECT queries are allowed&quot;
+    try:
+        with sqlite3.connect(&quot;file:shop.db?mode=ro&quot;, uri=True) as conn:      <span class="c"># read-only connection</span>
+            return str(conn.execute(query + &quot; LIMIT 100&quot;).fetchall())
+    except sqlite3.Error as err:
+        return f&quot;Error: {err}&quot;                       <span class="c"># goes back to the model so it can fix the query</span>
+
+agent = create_agent(init_chat_model(&quot;anthropic:claude-opus-5-5&quot;), [run_sql],
+                     system_prompt=&quot;Answer questions about orders with SQL. Show the SQL you used.&quot;)
+result = agent.invoke({&quot;messages&quot;: [(&quot;user&quot;, &quot;Which customer spent the most?&quot;)]})
+for m in result[&quot;messages&quot;][1:]:
+    print(f&quot;{m.type:5}&quot;, m.tool_calls[0][&quot;args&quot;][&quot;query&quot;] if getattr(m, &quot;tool_calls&quot;, None) else m.content)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">ai    SELECT customer, SUM(amount) AS total FROM order GROUP BY customer ORDER BY total DESC
+tool  Error: near &quot;order&quot;: syntax error
+ai    SELECT customer, SUM(amount) AS total FROM orders GROUP BY customer ORDER BY total DESC
+tool  [('acme', 320.0), ('globex', 80.0)]
+ai    acme spent the most: 320 in total. SQL: SELECT customer, SUM(amount) AS total FROM orders GROUP BY customer ORDER BY total DESC</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">The safety rails the tool relies on, at the database level: read-only mode, a time limit and the query plan.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import sqlite3
+import time
+
+conn = sqlite3.connect(&quot;:memory:&quot;)
+conn.executescript(&quot;&quot;&quot;CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT, amount REAL);
+    INSERT INTO orders VALUES (1,'acme',120), (2,'globex',80), (3,'acme',200);&quot;&quot;&quot;)
+schema = conn.execute(&quot;SELECT sql FROM sqlite_master WHERE type='table'&quot;).fetchall()   <span class="c"># <b>Step 1</b>: for the prompt</span>
+print(&quot;schema for the prompt:&quot;, schema[0][0])
+
+conn.execute(&quot;PRAGMA query_only = ON&quot;)                       <span class="c"># <b>Step 4</b>: this connection can't write</span>
+try:
+    conn.execute(&quot;DELETE FROM orders&quot;)
+except sqlite3.OperationalError as err:
+    print(&quot;write blocked:&quot;, err)
+
+deadline = time.time() + 2.0                                 <span class="c"># <b>Step 3</b>: a time limit</span>
+conn.set_progress_handler(lambda: time.time() > deadline, 10_000)
+
+sql = &quot;SELECT customer, SUM(amount) AS total FROM orders GROUP BY customer ORDER BY total DESC&quot;
+print(&quot;plan:&quot;, conn.execute(&quot;EXPLAIN QUERY PLAN &quot; + sql).fetchall())   <span class="c"># catch full scans on big tables</span>
+print(&quot;rows:&quot;, conn.execute(sql + &quot; LIMIT 100&quot;).fetchall())
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with Python 3.12.14.</p>
+        <span class="label">What it printed</span><pre class="bts-out">schema for the prompt: CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT, amount REAL)
+write blocked: attempt to write a readonly database
+plan: [(7, 0, 216, 'SCAN orders'), (9, 0, 0, 'USE TEMP B-TREE FOR GROUP BY'), (48, 0, 0, 'USE TEMP B-TREE FOR ORDER BY')]
+rows: [('acme', 320.0), ('globex', 80.0)]</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>Python docs: sqlite3 (set_progress_handler, PRAGMA query_only)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># Uses SQLite from the standard library.</span>
 import re, sqlite3
 
@@ -107,13 +176,15 @@ for attempt in (1, 2):
 print(&quot;rows:&quot;, rows)
 print(f&quot;answer: {rows[0][0]} spent the most ({rows[0][1]:.0f}).&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">attempt 1 rejected: table 'order' is not allowed (allowed: ['orders']) -> error sent back to the model
 attempt 2 ran: SELECT customer, SUM(amount) AS total FROM orders GROUP BY customer ORDER BY total DESC LIMIT 100
 rows: [('acme', 320.0), ('globex', 80.0), ('initech', 50.0)]
 answer: acme spent the most (320).</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Log the generated SQL for every question, next to the answer; show it to users too, so they can check it.</li><li>Run <code>EXPLAIN</code> on generated queries in development to catch slow full-table scans before they reach production.</li><li>Connect with a read-only database role and a statement timeout, then try a prompt that asks it to delete something, and confirm the database refuses.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="parent-document-retrieval.html">

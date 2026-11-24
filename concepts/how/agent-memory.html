@@ -26,7 +26,7 @@
         <span class="eyebrow">Tools &amp; agents · 5 of 7</span>
         <h1>How does agent memory work (short-term vs long-term)?</h1>
         <p class="tldr"><span class="label">In one line</span>Short-term memory is the current conversation's state, saved per thread. Long-term memory is facts saved across conversations, searched and added to the prompt when relevant.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-agent-memory">
@@ -59,11 +59,84 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Trim or summarize short-term history to control token cost.</li><li>Be deliberate about what's saved long-term, to avoid storing noise or sensitive data.</li><li>Let users see and delete what's remembered about them.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Short-term memory = a checkpointer (per thread). Long-term memory = a store (per user), reached from tools through the runtime.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+from langchain.tools import ToolRuntime, tool
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
+
+@tool
+def save_memory(fact: str, runtime: ToolRuntime) -> str:
+    &quot;&quot;&quot;Save a lasting fact about the user.&quot;&quot;&quot;
+    runtime.store.put((&quot;memories&quot;, &quot;user-42&quot;), fact, {&quot;fact&quot;: fact})
+    return &quot;saved&quot;
+
+@tool
+def recall(query: str, runtime: ToolRuntime) -> str:
+    &quot;&quot;&quot;Look up what we know about the user.&quot;&quot;&quot;
+    return str([item.value[&quot;fact&quot;] for item in runtime.store.search((&quot;memories&quot;, &quot;user-42&quot;))])
+
+agent = create_agent(init_chat_model(&quot;anthropic:claude-opus-5-5&quot;), [save_memory, recall],
+                     checkpointer=InMemorySaver(),        <span class="c"># short-term: per thread</span>
+                     store=InMemoryStore())                <span class="c"># long-term: across threads</span>
+
+def chat(thread, text):
+    out = agent.invoke({&quot;messages&quot;: [(&quot;user&quot;, text)]}, {&quot;configurable&quot;: {&quot;thread_id&quot;: thread}})
+    print(f&quot;[{thread}] {text!r} -> {out['messages'][-1].content}  ({len(out['messages'])} messages in thread)&quot;)
+
+chat(&quot;thread-1&quot;, &quot;I'm vegetarian. Remember that.&quot;)
+chat(&quot;thread-2&quot;, &quot;Suggest a dinner place near my hotel.&quot;)    <span class="c"># new thread: no history, but the memory is there</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langgraph 1.2.24 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">[thread-1] &quot;I'm vegetarian. Remember that.&quot; -> Noted - I'll keep dinner suggestions vegetarian.  (4 messages in thread)
+[thread-2] 'Suggest a dinner place near my hotel.' -> Since you're vegetarian, try Green Leaf near your hotel.  (4 messages in thread)</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">The two memories as objects you can query: the checkpointer's per-thread state, and a store with semantic search over memories.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.chat_models import init_chat_model
+from langchain.embeddings import init_embeddings
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import START, MessagesState, StateGraph
+from langgraph.store.memory import InMemoryStore
+
+<span class="c"># Short-term (<b>Step 1</b>): a checkpointer keeps each thread's messages</span>
+model = init_chat_model(&quot;anthropic:claude-opus-5-5&quot;)
+graph = StateGraph(MessagesState)
+graph.add_node(&quot;chat&quot;, lambda s: {&quot;messages&quot;: [model.invoke(s[&quot;messages&quot;])]})
+graph.add_edge(START, &quot;chat&quot;)
+app = graph.compile(checkpointer=InMemorySaver())
+cfg = {&quot;configurable&quot;: {&quot;thread_id&quot;: &quot;thread-1&quot;}}
+app.invoke({&quot;messages&quot;: [(&quot;user&quot;, &quot;hi&quot;)]}, cfg)
+app.invoke({&quot;messages&quot;: [(&quot;user&quot;, &quot;hi again&quot;)]}, cfg)
+print(&quot;thread-1 holds&quot;, len(app.get_state(cfg).values[&quot;messages&quot;]), &quot;messages&quot;)
+print(&quot;thread-2 holds&quot;, len(app.get_state({&quot;configurable&quot;: {&quot;thread_id&quot;: &quot;thread-2&quot;}}).values.get(&quot;messages&quot;, [])))
+
+<span class="c"># Long-term (<b>Steps 2-4</b>): a store, namespaced per user, with semantic search</span>
+store = InMemoryStore(index={&quot;embed&quot;: init_embeddings(&quot;openai:text-embedding-3-small&quot;), &quot;dims&quot;: 384})
+ns = (&quot;memories&quot;, &quot;user-42&quot;)
+for key, fact in [(&quot;diet&quot;, &quot;User is vegetarian&quot;), (&quot;seat&quot;, &quot;Prefers an aisle seat on flights&quot;),
+                  (&quot;lang&quot;, &quot;Writes in British English&quot;)]:
+    store.put(ns, key, {&quot;text&quot;: fact})
+for item in store.search(ns, query=&quot;what food should I suggest?&quot;, limit=2):
+    print(f&quot;{item.score:.2f}  {item.value['text']}&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langgraph 1.2.24 · with a scripted chat model in place of the API; a local embedding model (all-MiniLM-L6-v2) in place of the embedding API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">thread-1 holds 4 messages
+thread-2 holds 0
+0.21  User is vegetarian
+0.12  Prefers an aisle seat on flights</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langgraph/store/memory/__init__.py (InMemoryStore)</code> · <code>langgraph/checkpoint/memory/__init__.py (InMemorySaver)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import json, re
 words = lambda t: set(re.findall(r&quot;[a-z]+&quot;, t.lower()))
 
@@ -95,6 +168,7 @@ chat(&quot;user-42&quot;, &quot;thread-1&quot;, &quot;Also I like an aisle seat 
 chat(&quot;user-42&quot;, &quot;thread-2&quot;, &quot;Find a vegetarian place near my hotel&quot;)
 print(&quot;long-term store:&quot;, json.dumps(store))
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">[thread-1] &quot;I'm vegetarian, plan a dinner for Friday&quot;
    prompt = 0 earlier messages + memories []
 [thread-1] 'Also I like an aisle seat when I fly'
@@ -102,9 +176,10 @@ print(&quot;long-term store:&quot;, json.dumps(store))
 [thread-2] 'Find a vegetarian place near my hotel'
    prompt = 0 earlier messages + memories ['User is vegetarian']
 long-term store: {&quot;user-42&quot;: [&quot;User is vegetarian&quot;, &quot;User prefers an aisle seat on flights&quot;]}</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>LangGraph short-term memory: <code>graph.get_state({&quot;configurable&quot;: {&quot;thread_id&quot;: &quot;t1&quot;}}).values[&quot;messages&quot;]</code> shows exactly what the next turn will see.</li><li>LangGraph long-term memory: <code>store.search((&quot;memories&quot;, user_id), query=&quot;food preferences&quot;)</code> returns stored items with similarity scores; print them before they go into the prompt.</li><li>Print the final prompt of a new conversation to check that the right memories (and only those) were injected.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="multi-agent-supervisor.html">

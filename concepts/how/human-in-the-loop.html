@@ -26,7 +26,7 @@
         <span class="eyebrow">Tools &amp; agents · 6 of 7</span>
         <h1>How does human-in-the-loop approval work (interrupt and resume)?</h1>
         <p class="tldr"><span class="label">In one line</span>The graph pauses at a node, saves its state, and returns the pending action to your app. When a person decides, the app resumes the same thread with their answer.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-hitl">
@@ -72,11 +72,92 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>It requires a checkpointer, and the wait can last seconds or days.</li><li>On resume, the node runs again from its start: keep side effects after the interrupt call.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">One middleware line pauses the agent before chosen tools run. A person approves, edits or rejects; the same thread_id resumes it.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain.chat_models import init_chat_model
+from langchain.tools import tool
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
+
+@tool
+def send_email(to: str, body: str) -> str:
+    &quot;&quot;&quot;Send an email.&quot;&quot;&quot;
+    return f&quot;sent to {to}: {body}&quot;
+
+agent = create_agent(init_chat_model(&quot;anthropic:claude-opus-5-5&quot;), [send_email],
+                     middleware=[HumanInTheLoopMiddleware(interrupt_on={&quot;send_email&quot;: True})],
+                     checkpointer=InMemorySaver())
+config = {&quot;configurable&quot;: {&quot;thread_id&quot;: &quot;invoice-42&quot;}}
+
+result = agent.invoke({&quot;messages&quot;: [(&quot;user&quot;, &quot;Email Ravi that the invoice is attached&quot;)]}, config)
+request = result[&quot;__interrupt__&quot;][0].value                      <span class="c"># paused: nothing was sent</span>
+print(&quot;needs approval:&quot;, request[&quot;action_requests&quot;][0][&quot;args&quot;])
+
+edited = {&quot;type&quot;: &quot;edit&quot;, &quot;edited_action&quot;: {&quot;name&quot;: &quot;send_email&quot;,
+          &quot;args&quot;: {&quot;to&quot;: &quot;ravi@example.com&quot;, &quot;body&quot;: &quot;Hi Ravi, invoice #881 is attached. Thanks!&quot;}}}
+result = agent.invoke(Command(resume={&quot;decisions&quot;: [edited]}), config)   <span class="c"># same thread_id</span>
+print(&quot;tool ran:&quot;, result[&quot;messages&quot;][-2].content.splitlines()[-1])   <span class="c"># the edited call ran</span>
+print(&quot;agent:&quot;, result[&quot;messages&quot;][-1].content)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langgraph 1.2.24 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">needs approval: {'to': 'ravi@example.com', 'body': 'Hi Ravi, the invoice is attached.'}
+tool ran: sent to ravi@example.com: Hi Ravi, invoice #881 is attached. Thanks!
+agent: Done - the email was sent with your edits.</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">The mechanism the middleware uses: interrupt() inside a node, a checkpointer, and Command(resume=...).</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from typing import TypedDict
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
+
+class State(TypedDict):
+    to: str
+    draft: str
+    sent: bool
+
+def draft(state: State):
+    return {&quot;draft&quot;: f&quot;Hi {state['to']}, the invoice is attached.&quot;}
+
+def approve(state: State):
+    decision = interrupt({&quot;action&quot;: &quot;send_email&quot;, &quot;draft&quot;: state[&quot;draft&quot;]})   <span class="c"># <b>Step 2</b>: pause here</span>
+    print(&quot;  resumed with:&quot;, decision)                                        <span class="c"># <b>Step 6</b>: the person's answer</span>
+    return {&quot;draft&quot;: decision.get(&quot;edited&quot;, state[&quot;draft&quot;]), &quot;sent&quot;: decision[&quot;approved&quot;]}
+
+graph = StateGraph(State)
+graph.add_node(&quot;draft&quot;, draft)
+graph.add_node(&quot;approve&quot;, approve)
+graph.add_edge(START, &quot;draft&quot;)
+graph.add_edge(&quot;draft&quot;, &quot;approve&quot;)
+graph.add_edge(&quot;approve&quot;, END)
+app = graph.compile(checkpointer=InMemorySaver())        <span class="c"># <b>Step 3</b>: state saved at the pause</span>
+
+config = {&quot;configurable&quot;: {&quot;thread_id&quot;: &quot;t-9&quot;}}          <span class="c"># <b>Step 1</b></span>
+out = app.invoke({&quot;to&quot;: &quot;Ravi&quot;, &quot;draft&quot;: &quot;&quot;, &quot;sent&quot;: False}, config)
+print(&quot;paused with:&quot;, out[&quot;__interrupt__&quot;][0].value)
+snapshot = app.get_state(config)
+print(&quot;waiting at node:&quot;, snapshot.next)                 <span class="c"># <b>Step 4</b>: your UI shows this to a person</span>
+
+final = app.invoke(Command(resume={&quot;approved&quot;: True, &quot;edited&quot;: &quot;Hi Ravi, invoice #881 is attached.&quot;}), config)  <span class="c"># <b>Step 5</b></span>
+print(&quot;final state:&quot;, final)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langgraph 1.2.24.</p>
+        <span class="label">What it printed</span><pre class="bts-out">paused with: {'action': 'send_email', 'draft': 'Hi Ravi, the invoice is attached.'}
+waiting at node: ('approve',)
+  resumed with: {'approved': True, 'edited': 'Hi Ravi, invoice #881 is attached.'}
+final state: {'to': 'Ravi', 'draft': 'Hi Ravi, invoice #881 is attached.', 'sent': True}</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langgraph/types.py (interrupt, Command)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy><span class="c"># A tiny version of LangGraph's interrupt() and Command(resume=...).</span>
 import json
 
@@ -125,15 +206,17 @@ decision = {&quot;approved&quot;: True, &quot;edited&quot;: &quot;Hi Ravi, invoi
 <span class="c"># <b>Step 5</b>: invoke again with the decision and the SAME thread_id</span>
 print(&quot;final state:&quot;, json.dumps(invoke(None, &quot;thread-9&quot;, resume=decision)))
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">  ran draft: {'draft': 'Hi Ravi, the invoice is attached.'}
   paused at 'approve', state saved for thread-9
 app got: {&quot;__interrupt__&quot;: {&quot;action&quot;: &quot;send_email&quot;, &quot;draft&quot;: &quot;Hi Ravi, the invoice is attached.&quot;}}
   ran approve: {'approved': True, 'draft': 'Hi Ravi, invoice #881 is attached. Thanks!'}
   ran send: {'sent': True}
 final state: {&quot;to&quot;: &quot;Ravi&quot;, &quot;draft&quot;: &quot;Hi Ravi, invoice #881 is attached. Thanks!&quot;, &quot;approved&quot;: true, &quot;sent&quot;: true}</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>LangGraph: after the call that pauses, <code>state = graph.get_state(config)</code>; <code>state.next</code> shows the node that will run on resume and <code>state.tasks[0].interrupts</code> holds the payload.</li><li>The returned value also carries the pause: look for the <code>__interrupt__</code> key in what <code>invoke</code> returns.</li><li>Use a persistent checkpointer (SQLite or Postgres), stop your Python process after the interrupt, start it again and resume with <code>Command(resume=...)</code>: it still works, which proves nothing was held in memory.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="agent-memory.html">

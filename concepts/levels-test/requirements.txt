@@ -1,0 +1,27 @@
+# Libraries the Level 1/2 snippets were tested with (concepts/run-levels.js). Python 3.12.
+
+anthropic==2.13.0
+datasets==5.2.0
+faiss-cpu==1.16.0
+fastapi==0.165.0
+httpx==0.28.1
+langchain==1.5.2
+langchain-anthropic==1.7.12
+langchain-classic==1.1.0
+langchain-community==0.4.2
+langchain-core==1.8.4
+langchain-mcp-adapters==0.3.2
+langchain-openai==1.8.5
+langchain-text-splitters==1.2.0
+langgraph==1.2.24
+mcp==1.30.0
+numpy==2.5.5
+openai==3.58.0
+peft==0.22.0
+pyyaml==6.0.4
+rank-bm25==0.2.2
+sentence-transformers==6.3.0
+tiktoken==0.14.0
+torch==2.15.0
+transformers==5.24.0
+trl==1.18.2

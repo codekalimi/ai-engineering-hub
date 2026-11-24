@@ -571,3 +571,27 @@ pre .c b { color: var(--accent); font-style: normal; font-weight: 600; }
 pre, code { font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
 .guide-block pre { padding-top: 34px; }
 .page-head p a { color: var(--accent); }
+
+/* ---- Code at three levels ---- */
+.lv-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.lv-chip { display: inline-flex; gap: 6px; align-items: center; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); font: 500 12.5px var(--font-mono); color: var(--fg); text-decoration: none; }
+a.lv-chip:hover { border-color: var(--accent); color: var(--accent); }
+.lv-chip b { color: var(--packet); }
+.lv-arrow { color: var(--muted); font-size: 13px; }
+.clv { display: flex; flex-direction: column; gap: 10px; padding-top: 16px; border-top: 1px solid var(--line); min-width: 0; scroll-margin-top: 20px; }
+.lv-head { display: flex; gap: 12px; align-items: flex-start; }
+.lv-n { flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font: 600 14px var(--font-mono); background: var(--packet-soft); color: var(--packet); }
+.lv-head h3 { font-size: 17px; }
+.lv-head p { margin: 0; color: var(--muted); font-size: 13.5px; }
+.lv-note { margin: 0; font-size: 14.5px; max-width: 85ch; }
+.lv-test { margin: 0; font-size: 12.5px; color: var(--muted); }
+.lv-test.ok b { color: var(--accent); }
+.lv-test.checked b, .lv-test.none b { color: var(--packet); }
+.lv-src { margin: 0; font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.lv-src code { overflow-wrap: anywhere; }
+.lv-out > summary { cursor: pointer; font: 500 11px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); padding: 2px 0; }
+.lv-out[open] > summary { margin-bottom: 6px; }
+.lv-see { display: flex; flex-direction: column; gap: 8px; padding-top: 16px; border-top: 1px solid var(--line); }
+.lv-head > div { min-width: 0; }
+.lv-note, .lv-test, .bts-intro, .lv-head p, .bts-see li { overflow-wrap: anywhere; }
+.lv-note code, .lv-test code { overflow-wrap: anywhere; word-break: break-word; }

@@ -26,7 +26,7 @@
         <span class="eyebrow">Serving &amp; infrastructure · 8 of 10</span>
         <h1>How does an LLM gateway handle a request?</h1>
         <p class="tldr"><span class="label">In one line</span>Every app calls one internal API; the gateway authenticates the team, enforces limits, checks the cache, routes to the right model, falls back on errors and records usage.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-gateway">
@@ -55,11 +55,83 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Model upgrades become one central change behind an eval gate.</li><li>A natural place for PII redaction, logging policy and guardrails.</li><li>It's on every request's path, so it must be highly available and add little latency.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Gateway features you can get inside the app with LangChain: retries, fallback to another model, a response cache and a rate limiter. A shared gateway service (e.g. LiteLLM proxy) does the same for every team.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from langchain.chat_models import init_chat_model
+from langchain_core.caches import InMemoryCache
+from langchain_core.globals import set_llm_cache
+from langchain_core.rate_limiters import InMemoryRateLimiter
+
+set_llm_cache(InMemoryCache())                                       <span class="c"># identical requests are served from cache</span>
+limiter = InMemoryRateLimiter(requests_per_second=5, max_bucket_size=10)
+
+primary = init_chat_model(&quot;anthropic:claude-opus-5-5&quot;, rate_limiter=limiter)
+backup = init_chat_model(&quot;anthropic:claude-sonnet-5-5&quot;, rate_limiter=limiter)
+model = primary.with_fallbacks([backup])                             <span class="c"># on an error, try the next model</span>
+
+print(model.invoke(&quot;Where is my order #123?&quot;).content)               <span class="c"># primary fails -> backup answers</span>
+print(model.invoke(&quot;Where is my order #123?&quot;).content, &quot;(second call: from cache)&quot;)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langchain-core 1.8.4 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">Your order ships tomorrow.
+Your order ships tomorrow. (second call: from cache)</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">A minimal gateway service: one endpoint, model aliases, a per-team budget, fallback and a usage log. Tested with FastAPI's test client.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from pydantic import BaseModel
+
+ALIASES = {&quot;smart&quot;: [&quot;provider-a/big-model&quot;, &quot;provider-b/big-model-2&quot;]}   <span class="c"># primary, then fallback</span>
+BUDGET_USD = {&quot;team-search&quot;: 0.001}
+SPENT, USAGE_LOG = {}, []
+
+def call_provider(target, prompt):                       <span class="c"># stands in for the provider SDK calls</span>
+    if target.startswith(&quot;provider-a&quot;):
+        raise TimeoutError(&quot;provider-a timed out&quot;)
+    return f&quot;[{target}] answer to {prompt!r}&quot;, 120
+
+class ChatRequest(BaseModel):
+    model: str
+    prompt: str
+
+app = FastAPI()
+
+@app.post(&quot;/v1/chat&quot;)
+def chat(req: ChatRequest, team: str = &quot;team-search&quot;):
+    if SPENT.get(team, 0) >= BUDGET_USD[team]:                       <span class="c"># <b>Step 2</b>: budget check</span>
+        raise HTTPException(429, &quot;budget exceeded&quot;)
+    for target in ALIASES[req.model]:                                <span class="c"># <b>Step 4</b>: alias -> real model</span>
+        try:
+            text, tokens = call_provider(target, req.prompt)
+        except TimeoutError:
+            continue                                                 <span class="c"># <b>Step 5</b>: fall back</span>
+        SPENT[team] = SPENT.get(team, 0) + tokens * 5 / 1e6
+        USAGE_LOG.append({&quot;team&quot;: team, &quot;model&quot;: target, &quot;tokens&quot;: tokens})   <span class="c"># <b>Step 6</b>: record usage</span>
+        return {&quot;model&quot;: target, &quot;text&quot;: text}
+    raise HTTPException(503, &quot;all providers failed&quot;)
+
+client = TestClient(app)
+for _ in range(3):
+    r = client.post(&quot;/v1/chat&quot;, json={&quot;model&quot;: &quot;smart&quot;, &quot;prompt&quot;: &quot;hi&quot;})
+    print(r.status_code, r.json())
+print(&quot;usage log:&quot;, USAGE_LOG)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with Python 3.12.14.</p>
+        <span class="label">What it printed</span><pre class="bts-out">200 {'model': 'provider-b/big-model-2', 'text': &quot;[provider-b/big-model-2] answer to 'hi'&quot;}
+200 {'model': 'provider-b/big-model-2', 'text': &quot;[provider-b/big-model-2] answer to 'hi'&quot;}
+429 {'detail': 'budget exceeded'}
+usage log: [{'team': 'team-search', 'model': 'provider-b/big-model-2', 'tokens': 120}, {'team': 'team-search', 'model': 'provider-b/big-model-2', 'tokens': 120}]</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>LiteLLM proxy (litellm/proxy/) for a production version</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import random
 random.seed(1)
 
@@ -97,14 +169,16 @@ for prompt in [&quot;summarize ticket 1&quot;, &quot;summarize ticket 1&quot;, &
     print(gateway(&quot;team-search&quot;, &quot;smart&quot;, prompt))
 print(&quot;usage log:&quot;, LOG)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">   provider-a timed out, falling back
 [big-model-2] answer to 'summarize ticket 1'
 [big-model-2] answer to 'summarize ticket 1' (from cache)
 [big-model] answer to 'summarize ticket 2'
 usage log: [('team-search', 'provider-b', 120), ('team-search', 'cache', 0), ('team-search', 'provider-a', 120)]</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>LiteLLM proxy: define model aliases with fallbacks in its config, call it with the OpenAI SDK, and read its logs/spend tracking for every request.</li><li>Force a failure (wrong API key on the primary provider) and confirm the request still succeeds through the fallback, with the fallback recorded in the logs.</li><li>Check response headers and logs for the provider actually used, tokens and cost: that per-team record is what finance asks for.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="prompt-caching.html">

@@ -26,7 +26,7 @@
         <span class="eyebrow">LangChain &amp; LangGraph · 4 of 7</span>
         <h1>How do reducers merge state updates in LangGraph?</h1>
         <p class="tldr"><span class="label">In one line</span>Each state key can have a reducer that decides how a node's update combines with the current value. Without one, the new value overwrites the old.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-reducers">
@@ -59,18 +59,78 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Reducers matter most when parallel nodes update the same key in one step.</li><li>Return only changed keys from a node; returning the whole messages list again can duplicate messages.</li></ul></div>
         </div>
-        <pre>from typing import Annotated, TypedDict
-from operator import add
-from langgraph.graph.message import add_messages
-
-class State(TypedDict):
-    messages: Annotated[list, add_messages]   # append / update by id
-    sources: Annotated[list, add]             # concatenate lists
-    status: str                               # overwrite</pre>
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">Annotate state keys with a reducer and parallel nodes can safely write to the same key.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import operator
+from typing import Annotated, TypedDict
+from langgraph.graph import END, START, StateGraph
+
+class State(TypedDict):
+    query: str
+    results: Annotated[list, operator.add]       <span class="c"># reducer: concatenate updates</span>
+
+def web(state: State):
+    return {&quot;results&quot;: [f&quot;web hit for {state['query']}&quot;]}
+
+def docs(state: State):
+    return {&quot;results&quot;: [f&quot;docs hit for {state['query']}&quot;]}
+
+graph = StateGraph(State)
+graph.add_node(&quot;web&quot;, web)
+graph.add_node(&quot;docs&quot;, docs)
+graph.add_edge(START, &quot;web&quot;)                      <span class="c"># both run in the same step (fan-out)</span>
+graph.add_edge(START, &quot;docs&quot;)
+graph.add_edge(&quot;web&quot;, END)
+graph.add_edge(&quot;docs&quot;, END)
+print(graph.compile().invoke({&quot;query&quot;: &quot;refund policy&quot;, &quot;results&quot;: []}))
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langgraph 1.2.24.</p>
+        <span class="label">What it printed</span><pre class="bts-out">{'query': 'refund policy', 'results': ['docs hit for refund policy', 'web hit for refund policy']}</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What happens without a reducer, and what add_messages does: append, replace by id, delete with RemoveMessage.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>from typing import TypedDict
+from langchain.messages import AIMessage, HumanMessage, RemoveMessage
+from langgraph.errors import InvalidUpdateError
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+
+class NoReducer(TypedDict):
+    results: list                               <span class="c"># <b>Step 4</b>: no reducer -> &quot;last write wins&quot;</span>
+
+g = StateGraph(NoReducer)
+g.add_node(&quot;web&quot;, lambda s: {&quot;results&quot;: [&quot;web&quot;]})
+g.add_node(&quot;docs&quot;, lambda s: {&quot;results&quot;: [&quot;docs&quot;]})
+g.add_edge(START, &quot;web&quot;)
+g.add_edge(START, &quot;docs&quot;)
+g.add_edge(&quot;web&quot;, END)
+g.add_edge(&quot;docs&quot;, END)
+try:
+    g.compile().invoke({&quot;results&quot;: []})
+except InvalidUpdateError as err:
+    print(&quot;two writes, no reducer:&quot;, str(err).split(&quot;.&quot;)[0])
+
+<span class="c"># <b>Steps 2-3</b>: add_messages(current, update)</span>
+history = [HumanMessage(&quot;hi&quot;, id=&quot;1&quot;), AIMessage(&quot;draft&quot;, id=&quot;2&quot;)]
+print([m.content for m in add_messages(history, [AIMessage(&quot;hello!&quot;, id=&quot;3&quot;)])])     <span class="c"># new id -> append</span>
+print([m.content for m in add_messages(history, [AIMessage(&quot;final&quot;, id=&quot;2&quot;)])])      <span class="c"># same id -> replace</span>
+print([m.content for m in add_messages(history, [RemoveMessage(id=&quot;1&quot;)])])           <span class="c"># RemoveMessage -> delete</span>
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langgraph 1.2.24.</p>
+        <span class="label">What it printed</span><pre class="bts-out">two writes, no reducer: At key 'results': Can receive only one value per step
+['hi', 'draft', 'hello!']
+['hi', 'final']
+['draft']</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langgraph/graph/message.py (add_messages)</code> · <code>langgraph/errors.py (InvalidUpdateError)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import itertools, operator
 
 _ids = itertools.count(1)
@@ -108,13 +168,15 @@ apply(state, {&quot;messages&quot;: [msg(&quot;ai&quot;, &quot;draft&quot;, id=&
 apply(state, {&quot;sources&quot;: [&quot;doc2&quot;]}, &quot;retriever&quot;)
 apply(state, {&quot;messages&quot;: [msg(&quot;ai&quot;, &quot;final&quot;, id=&quot;a1&quot;)], &quot;status&quot;: &quot;done&quot;}, &quot;editor&quot;)   <span class="c"># same id -> replaced</span>
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">after input     {'messages': ['m1:hi'], 'status': 'start'}
 after writer    {'messages': ['m1:hi', 'a1:draft'], 'status': 'drafted', 'sources': ['doc1']}
 after retriever {'messages': ['m1:hi', 'a1:draft'], 'status': 'drafted', 'sources': ['doc1', 'doc2']}
 after editor    {'messages': ['m1:hi', 'a1:final'], 'status': 'done', 'sources': ['doc1', 'doc2']}</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>Compare <code>graph.stream(inputs, stream_mode=&quot;updates&quot;)</code> (what each node returned) with <code>stream_mode=&quot;values&quot;</code> (the state after the reducers ran).</li><li>Return two updates to the same plain key from parallel nodes and read the error: LangGraph refuses to guess how to combine them.</li><li>Read <code>add_messages</code> in <code>langgraph/graph/message.py</code>: it is short and does exactly the id-based append-or-replace shown below.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="langgraph-execution.html">

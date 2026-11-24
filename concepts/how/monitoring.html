@@ -26,7 +26,7 @@
         <span class="eyebrow">Quality, safety &amp; operations · 6 of 6</span>
         <h1>How does production monitoring of an LLM app work?</h1>
         <p class="tldr"><span class="label">In one line</span>Every request is traced with its inputs, retrieved context, outputs, tokens, cost and latency; dashboards and alerts watch these metrics, and feedback flows back into the eval set.</p>
-        <p class="jump"><a href="#behind-the-scenes">↓ Behind the scenes: run it yourself in plain Python</a></p>
+        <p class="jump"><a href="#behind-the-scenes">↓ The code: use it, under the hood, from scratch</a></p>
       </header>
 
       <article class="hw hw-page" id="hw-observability">
@@ -55,11 +55,63 @@
           </div>
           <div class="hw-notes"><span class="label">Key details</span><ul><li>Tag traces with prompt and model versions so you can compare releases.</li><li>Mask personal data in logs and traces.</li></ul></div>
         </div>
-        
       </article>
 
-      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">Behind the scenes</span><h2>See it run</h2></div>
-          <p class="bts-intro">A tiny from-scratch version of what really happens. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: plain Python, nothing to install.</p>
+      <section class="bts" id="behind-the-scenes"><div class="bts-head"><span class="label">The code</span><h2>From the API down to the idea</h2></div><p class="bts-intro">The same mechanism at three zoom levels: the code you write, what the library does with it, and the idea with no library at all.</p>
+        <div class="lv-nav"><a class="lv-chip" href="#level-1"><b>1</b> Use it</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-2"><b>2</b> Under the hood</a><span class="lv-arrow">→</span><a class="lv-chip" href="#level-3"><b>3</b> From scratch</a></div>
+        <div class="clv clv-1" id="level-1">
+        <div class="lv-head"><span class="lv-n">1</span><div><h3>Use it</h3><p>What you'd write at work</p></div></div>
+        <p class="lv-note">LangSmith tracing: set two environment variables and every LangChain/LangGraph run is traced. @traceable adds your own functions to the trace, with metadata to slice by.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import os
+from langsmith import traceable
+from langchain.chat_models import init_chat_model
+
+<span class="c"># In production: LANGSMITH_TRACING=true and LANGSMITH_API_KEY=... (left off here, so nothing is uploaded)</span>
+os.environ.setdefault(&quot;LANGSMITH_TRACING&quot;, &quot;false&quot;)
+model = init_chat_model(&quot;anthropic:claude-opus-5-5&quot;)
+
+@traceable(run_type=&quot;chain&quot;, name=&quot;support_answer&quot;, metadata={&quot;prompt_version&quot;: &quot;v2&quot;, &quot;feature&quot;: &quot;support-chat&quot;})
+def answer(question: str) -> str:
+    return model.invoke([(&quot;system&quot;, &quot;Answer support questions briefly.&quot;), (&quot;human&quot;, question)]).content
+
+print(answer(&quot;How long do refunds take?&quot;))
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">Refunds take 5 working days.</pre>
+        
+      </div><div class="clv clv-2" id="level-2">
+        <div class="lv-head"><span class="lv-n">2</span><div><h3>Under the hood</h3><p>What the library does for you, with its real classes</p></div></div>
+        <p class="lv-note">What a tracer records per request, as a callback: latency, tokens, model and your tags, emitted as one structured log line you can aggregate and alert on.</p>
+        <div class="bts-code"><span class="bts-file">python</span><pre data-copy>import json
+import time
+from langchain.chat_models import init_chat_model
+from langchain_core.callbacks import BaseCallbackHandler
+
+class MetricsLogger(BaseCallbackHandler):
+    def __init__(self):
+        self.start = {}
+    def on_chat_model_start(self, serialized, messages, *, run_id, tags=None, metadata=None, **kw):
+        self.start[run_id] = (time.time(), tags, metadata or {})       <span class="c"># metadata arrives with the start event</span>
+    def on_llm_end(self, response, *, run_id, **kw):
+        started, tags, metadata = self.start.pop(run_id)
+        usage = response.generations[0][0].message.usage_metadata or {}
+        record = {&quot;latency_ms&quot;: round((time.time() - started) * 1000, 1),                  <span class="c"># <b>Steps 1-2</b></span>
+                  &quot;input_tokens&quot;: usage.get(&quot;input_tokens&quot;), &quot;output_tokens&quot;: usage.get(&quot;output_tokens&quot;),
+                  &quot;model&quot;: metadata.get(&quot;ls_model_name&quot;), &quot;prompt_version&quot;: metadata.get(&quot;prompt_version&quot;), &quot;tags&quot;: tags}
+        print(json.dumps(record))          <span class="c"># in production: send to your log pipeline / metrics backend</span>
+
+model = init_chat_model(&quot;anthropic:claude-opus-5-5&quot;)
+config = {&quot;callbacks&quot;: [MetricsLogger()], &quot;metadata&quot;: {&quot;prompt_version&quot;: &quot;v2&quot;}, &quot;tags&quot;: [&quot;support-chat&quot;]}
+for q in [&quot;How long do refunds take?&quot;, &quot;When does my order ship?&quot;]:
+    model.invoke(q, config)
+</pre></div>
+        <p class="lv-test ok"><b>✓ Ran</b> with langchain 1.5.2, langchain-core 1.8.4 · with a scripted chat model in place of the API.</p>
+        <span class="label">What it printed</span><pre class="bts-out">{&quot;latency_ms&quot;: 0.2, &quot;input_tokens&quot;: 50, &quot;output_tokens&quot;: 5, &quot;model&quot;: &quot;scripted-fake&quot;, &quot;prompt_version&quot;: &quot;v2&quot;, &quot;tags&quot;: [&quot;support-chat&quot;]}
+{&quot;latency_ms&quot;: 0.0, &quot;input_tokens&quot;: 50, &quot;output_tokens&quot;: 5, &quot;model&quot;: &quot;scripted-fake&quot;, &quot;prompt_version&quot;: &quot;v2&quot;, &quot;tags&quot;: [&quot;support-chat&quot;]}</pre>
+        <p class="lv-src"><span class="label">Read the real code</span> <code>langchain_core/tracers/langchain.py (LangChainTracer)</code></p>
+      </div><div class="clv clv-3" id="level-3">
+          <div class="lv-head"><span class="lv-n">3</span><div><h3>From scratch</h3><p>The idea in plain Python, no libraries</p></div></div>
+          <p class="lv-note">A tiny version of the mechanism. The <b>Step</b> comments match the numbered steps above. Save it as a <code>.py</code> file and run <code>python3 file.py</code>: nothing to install.</p>
           <div class="bts-code"><span class="bts-file">python3 · standard library only</span><pre data-copy>import json, random, statistics
 random.seed(11)
 TRACES = []
@@ -92,13 +144,15 @@ for v in (&quot;v1&quot;, &quot;v2&quot;):
     if v == &quot;v2&quot; and (up &lt; 0.7 or p95 > 3):
         print(&quot;ALERT: v2 regressed -> roll back, add the bad traces to the eval set (Step 5)&quot;)
 </pre></div>
+          <p class="lv-test ok"><b>✓ Ran</b> with plain Python 3.9+.</p>
           <span class="label">What it prints</span><pre class="bts-out">one trace: {&quot;feature&quot;: &quot;support-chat&quot;, &quot;prompt_version&quot;: &quot;v1&quot;, &quot;spans&quot;: [{&quot;name&quot;: &quot;retrieve&quot;, &quot;secs&quot;: 0.12}, {&quot;name&quot;: &quot;llm&quot;, &quot;secs&quot;: 1.19}], &quot;tokens&quot;: 900, &quot;cost_usd&quot;: 0.0027, &quot;thumbs_up&quot;: false}
 v1: p95 latency 1.51s  cost/request 0.0027 USD  thumbs-up 76%
 v2: p95 latency 3.19s  cost/request 0.0057 USD  thumbs-up 56%
 ALERT: v2 regressed -> roll back, add the bad traces to the eval set (Step 5)</pre>
-          <span class="label">Watch it in a real system</span>
+        </div>
+        <div class="lv-see"><span class="label">Watch it in a real system</span>
           <ul class="bts-see"><li>LangSmith or Langfuse: open one trace and read it top to bottom (prompt, retrieved context, tool calls, tokens, latency per step) before building any dashboard.</li><li>OpenTelemetry has GenAI semantic conventions (model, token usage, operation) so LLM spans fit into your existing tracing backend.</li><li>Tag every trace with prompt version, model and feature, then compare a release with the previous one on latency, cost and feedback.</li></ul>
-          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></section>
+          <p class="bts-more">More ways to look inside any AI tool: <a href="../behind-the-scenes.html">How to see behind the scenes</a></p></div></section>
 
       <nav class="topic-nav" aria-label="Previous and next explanation">
         <a class="tn prev" href="guardrails.html">
