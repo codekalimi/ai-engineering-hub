@@ -40,6 +40,12 @@
       ],
     },
     {
+      group: "Concepts",
+      pages: [
+        { id: "concepts/how-it-works", title: "How it works", href: "concepts/how-it-works.html" },
+      ],
+    },
+    {
       group: "Career",
       pages: [
         {

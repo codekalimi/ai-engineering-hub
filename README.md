@@ -17,11 +17,31 @@ ai-engineering-notes/
 │   ├── templates.html          Mental templates page
 │   ├── components.html         Component reference (data: components-data.js)
 │   └── interview.html          Class/method interview prep (data: interview-data.js)
+├── concepts/
+│   ├── how-it-works.html       52 "how does X work" explanations with diagrams (renderer: assets/howitworks.js)
+│   └── how-it-works-data*.js   The content (two files)
 └── career/
     ├── ai-roles.html           Roles, skills, levels, 90-day plan
     ├── *-interview.html        One question bank per role (all share assets/qbank.js)
     └── data/                   Questions per role: ai-engineer.js, fde.js, ai-infra.js, ai-architect.js
 ```
+
+## Add a "How it works" explanation
+
+Add an `I(...)` entry in `concepts/how-it-works-data-2.js` (or the first file):
+
+```js
+I("c-retrieval", "hw-my-topic", "How does X work?", "One-line answer.",
+  F([{ label: "Optional row label", steps: ["Input||io", "Step|small text", "LLM||model", "Store||store", "Check?||check", "Output||io"],
+       loop: "optional: what repeats" }]),
+  ["Step 1 explanation", "Step 2 ..."],
+  ["Key detail", "..."],
+  `optional code`),
+```
+
+Step syntax: `"Label|small text|kind"`, kinds `io`, `model`, `store`, `check` (default: plain step).
+Write `\\|` for a literal pipe. Options: `alt: true` on a row = alternatives ("or"), `{ chain: true }` on F = ↓ between rows.
+Sequence diagrams: `S(["App", "LLM"], [[0, 1, "request"], [1, 0, "response"], [1, 1, "a note"]])`.
 
 ## Add an interview question
 

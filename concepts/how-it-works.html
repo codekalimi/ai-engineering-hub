@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>How It Works</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="shell" data-root="../" data-page="concepts/how-it-works" data-spy="1">
+  <nav class="sidebar" id="sidebar" aria-label="Index"></nav>
+  <div class="scrim"></div>
+  <div class="main">
+    <div class="topbar">
+      <button class="icon-btn" id="navToggle" type="button" aria-controls="sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span class="t">Index</span></button>
+      <span class="crumbs"><a href="../index.html">Home</a> / Concepts / How it works</span>
+    </div>
+    <main class="content">
+      <header class="page-head">
+        <span class="eyebrow">Concepts · Quick reference</span>
+        <h1>How It Works</h1>
+        <p>Short technical explanations of how AI systems work underneath, from tokens and attention to RAG, agents, serving and evaluation. Each one has a one-line answer, a diagram, numbered steps that follow the diagram, and the key details interviewers probe.</p>
+        <p class="stats" id="stats"></p>
+      </header>
+
+      <section class="section" id="legend">
+        <div class="section-head">
+          <h2>How to read the diagrams</h2>
+          <p>Flow diagrams read left to right; dashed loops show steps that repeat. Sequence diagrams read top to bottom: each numbered arrow is one message between two parts of the system.</p>
+        </div>
+        <div class="fd legend">
+          <span class="legend-item"><span class="fn k-io"><b>Input / output</b></span></span>
+          <span class="legend-item"><span class="fn k-model"><b>Model / compute</b></span></span>
+          <span class="legend-item"><span class="fn k-store"><b>Stored data</b></span></span>
+          <span class="legend-item"><span class="fn k-check"><b>Check / decision</b></span></span>
+          <span class="legend-item"><span class="fn"><b>Processing step</b></span></span>
+          <span class="legend-item"><span class="farr" aria-hidden="true"><svg viewBox="0 0 24 12"><path d="M0 6h20"/><path d="M15 1l6 5-6 5"/></svg></span>then</span>
+          <span class="legend-item"><span class="for">or</span>alternatives</span>
+        </div>
+      </section>
+
+      <div class="finder">
+        <label class="search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input id="q" type="search" placeholder="Search, e.g. kv cache, rerank, interrupt, lora" autocomplete="off" aria-label="Search explanations">
+        </label>
+        <span class="count" id="count"></span>
+      </div>
+      <div class="chainline" id="hw-chips"></div>
+
+      <div id="hw-list" class="catalog"></div>
+      <p id="empty" class="muted-p" hidden>Nothing matches. Try a shorter word.</p>
+
+      <footer>Related: <a href="../langchain/under-the-hood.html">LangChain under the hood</a> (step-through animations) · <a href="../langchain/components.html">Components</a> · <a href="../career/ai-engineer-interview.html">AI Engineer questions</a>. Numbers are typical values for explanation; check current docs for exact figures.</footer>
+    </main>
+  </div>
+</div>
+<script src="how-it-works-data.js"></script>
+<script src="how-it-works-data-2.js"></script>
+<script src="../assets/howitworks.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>
