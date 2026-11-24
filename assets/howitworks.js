@@ -1,16 +1,14 @@
 // "How it works" renderer. Reads window.HOW (see concepts/how-it-works-data.js).
+// Used two ways:
+//   - in the browser by concepts/how-it-works.html (the one-page cheat sheet, with search)
+//   - in Node by concepts/gen-how-pages.js, which writes one static page per explanation
 // Diagram types:
 //   flow: { type: "flow", chain?: true, rows: [{ label?, alt?: true, steps: ["Label|sub|kind", ...], loop?: "text" }] }
 //         kinds: io (input/output), model, store, check (decision/check), step (default)
 //         chain: draw ↓ between rows. alt: steps are alternatives ("or"), not a sequence.
 //   seq:  { type: "seq", actors: ["App", "LLM"], msgs: [[from, to, "label"], ...] }  (from === to → note on that actor)
-(function () {
-  const H = window.HOW;
-  if (!H) return;
-  const $ = (id) => document.getElementById(id);
+(function (root) {
   const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-
-  window.PAGE_SUBS = [["#legend", "How to read the diagrams"]].concat(H.cats.map((c) => ["#" + c.id, c.title]));
 
   function node(spec) {
     // fields are separated by "|"; write "\\|" in the data for a literal pipe (e.g. LCEL code)
@@ -60,21 +58,11 @@
   }
 
   const diagram = (d) => (d.type === "seq" ? seq(d) : flow(d));
+  const diagrams = (it) => (Array.isArray(it.diagram) ? it.diagram : [it.diagram]);
 
-  $("hw-chips").innerHTML = H.cats.map((c) => `<a class="chip" href="#${c.id}">${esc(c.title)}</a>`).join("");
-
-  $("hw-list").innerHTML = H.cats.map((c) => {
-    const items = H.items.filter((it) => it.cat === c.id).map((it) => {
-      const ds = Array.isArray(it.diagram) ? it.diagram : [it.diagram];
-      const hay = [it.q, it.tldr, ...it.steps, ...(it.notes || []), it.code || "", c.title,
-        ...ds.flatMap((d) => d.type === "seq" ? d.actors.concat(d.msgs.map((m) => m[2])) : d.rows.flatMap((r) => r.steps.concat(r.label || "", r.loop || "")))].join(" ").toLowerCase();
-      return `<article class="hw" id="${it.id}" data-search="${esc(hay)}">
-        <header class="hw-head">
-          <h3>${esc(it.q)}</h3>
-          <a class="hw-anchor" href="#${it.id}" aria-label="Link to this explanation">#</a>
-        </header>
-        <p class="tldr"><span class="label">In one line</span>${esc(it.tldr)}</p>
-        ${ds.map((d) => (d.title ? `<span class="label dtitle">${esc(d.title)}</span>` : "") + diagram(d)).join("")}
+  // Everything below the one-line answer: diagram(s), steps, key details, code
+  function body(it) {
+    return `${diagrams(it).map((d) => (d.title ? `<span class="label dtitle">${esc(d.title)}</span>` : "") + diagram(d)).join("")}
         <div class="hw-body">
           <div class="hw-steps">
             <span class="label">Step by step</span>
@@ -82,7 +70,45 @@
           </div>
           ${it.notes && it.notes.length ? `<div class="hw-notes"><span class="label">Key details</span><ul>${it.notes.map((s) => `<li>${esc(s)}</li>`).join("")}</ul></div>` : ""}
         </div>
-        ${it.code ? `<pre>${esc(it.code)}</pre>` : ""}
+        ${it.code ? `<pre>${esc(it.code)}</pre>` : ""}`;
+  }
+
+  const legend = () => `<div class="fd legend">
+          <span class="legend-item"><span class="fn k-io"><b>Input / output</b></span></span>
+          <span class="legend-item"><span class="fn k-model"><b>Model / compute</b></span></span>
+          <span class="legend-item"><span class="fn k-store"><b>Stored data</b></span></span>
+          <span class="legend-item"><span class="fn k-check"><b>Check / decision</b></span></span>
+          <span class="legend-item"><span class="fn"><b>Processing step</b></span></span>
+          <span class="legend-item">${ARROW}then</span>
+          <span class="legend-item"><span class="for">or</span>alternatives</span>
+        </div>`;
+
+  const R = { esc, node, flow, seq, diagram, diagrams, body, legend };
+  if (typeof module !== "undefined" && module.exports) { module.exports = R; return; }
+  root.HowRender = R;
+
+  // ---- The one-page cheat sheet (concepts/how-it-works.html) ----
+  const H = root.HOW;
+  const $ = (id) => document.getElementById(id);
+  if (!H || !$("hw-list")) return;
+  const META = root.HOW_META || {};
+
+  window.PAGE_SUBS = [["#legend", "How to read the diagrams"]];
+
+  $("hw-chips").innerHTML = H.cats.map((c) => `<a class="chip" href="#${c.id}">${esc(c.title)}</a>`).join("");
+
+  $("hw-list").innerHTML = H.cats.map((c) => {
+    const items = H.items.filter((it) => it.cat === c.id).map((it) => {
+      const page = META[it.id] ? `how/${META[it.id].slug}.html` : "";
+      const hay = [it.q, it.tldr, ...it.steps, ...(it.notes || []), it.code || "", c.title,
+        ...diagrams(it).flatMap((d) => d.type === "seq" ? d.actors.concat(d.msgs.map((m) => m[2])) : d.rows.flatMap((r) => r.steps.concat(r.label || "", r.loop || "")))].join(" ").toLowerCase();
+      return `<article class="hw" id="${it.id}" data-search="${esc(hay)}">
+        <header class="hw-head">
+          <h3>${page ? `<a href="${page}">${esc(it.q)}</a>` : esc(it.q)}</h3>
+          <span class="hw-links">${page ? `<a class="hw-open" href="${page}">Open page →</a>` : ""}<a class="hw-anchor" href="#${it.id}" aria-label="Link to this explanation">#</a></span>
+        </header>
+        <p class="tldr"><span class="label">In one line</span>${esc(it.tldr)}</p>
+        ${body(it)}
       </article>`;
     }).join("");
     return `<section class="section hwcat" id="${c.id}">
@@ -110,6 +136,6 @@
   }
   q.addEventListener("input", apply);
   document.addEventListener("keydown", (e) => { if (e.key === "/" && document.activeElement !== q) { e.preventDefault(); q.focus(); } });
-  $("stats").innerHTML = `<b>${H.items.length}</b> explanations · <b>${H.cats.length}</b> topics · every one with a diagram`;
+  $("stats").innerHTML = `<b>${H.items.length}</b> explanations · <b>${H.cats.length}</b> topics · every one with a diagram and its own page`;
   apply();
-})();
+})(typeof window !== "undefined" ? window : globalThis);

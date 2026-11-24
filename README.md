@@ -18,8 +18,11 @@ ai-engineering-notes/
 │   ├── components.html         Component reference (data: components-data.js)
 │   └── interview.html          Class/method interview prep (data: interview-data.js)
 ├── concepts/
-│   ├── how-it-works.html       52 "how does X work" explanations with diagrams (renderer: assets/howitworks.js)
-│   └── how-it-works-data*.js   The content (two files)
+│   ├── how-it-works.html       All 52 "how does X work" explanations on one page, with search
+│   ├── how-it-works-data*.js   The content (two files)
+│   ├── how-meta.js             Each explanation's page name, short title and related links
+│   ├── gen-how-pages.js        Generates how/*.html and the topic list in the left index
+│   └── how/                    One generated page per explanation (don't edit by hand)
 └── career/
     ├── ai-roles.html           Roles, skills, levels, 90-day plan
     ├── *-interview.html        One question bank per role (all share assets/qbank.js)
@@ -28,7 +31,16 @@ ai-engineering-notes/
 
 ## Add a "How it works" explanation
 
-Add an `I(...)` entry in `concepts/how-it-works-data-2.js` (or the first file):
+Each explanation appears twice: on the one-page cheat sheet and on its own page in `concepts/how/`.
+The separate pages are generated, so after any change to the data run (Node.js only, nothing to install):
+
+```
+node concepts/gen-how-pages.js
+```
+
+It checks the data first, then rewrites `concepts/how/*.html` and the topic list in `assets/site.js`.
+
+1. Add an `I(...)` entry in `concepts/how-it-works-data-2.js` (or the first file):
 
 ```js
 I("c-retrieval", "hw-my-topic", "How does X work?", "One-line answer.",
@@ -38,6 +50,14 @@ I("c-retrieval", "hw-my-topic", "How does X work?", "One-line answer.",
   ["Key detail", "..."],
   `optional code`),
 ```
+
+2. Add a line to `concepts/how-meta.js` (page file name, short title for the index, 3-4 related ids):
+
+```js
+M("my-topic", "my-topic", "My topic", "rag rerank embeddings");
+```
+
+3. Run `node concepts/gen-how-pages.js`.
 
 Step syntax: `"Label|small text|kind"`, kinds `io`, `model`, `store`, `check` (default: plain step).
 Write `\\|` for a literal pipe. Options: `alt: true` on a row = alternatives ("or"), `{ chain: true }` on F = ↓ between rows.
